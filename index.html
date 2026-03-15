@@ -1358,7 +1358,7 @@ tr:hover td { background:rgba(255,255,255,0.02); }
             <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)"><span style="font-size:14px">—</span> Alertes cote live</div>
             <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)"><span style="font-size:14px">—</span> API automatisation</div>
           </div>
-          <button style="width:100%;background:var(--blue);border:none;border-radius:10px;padding:11px;color:#fff;cursor:pointer;font-size:12px;font-weight:700;letter-spacing:0.03em">Choisir PRO →</button>
+          <a href="https://uazgnjsa.mychariow.shop/prd_4x9qs9" target="_blank" style="display:block;width:100%;background:var(--blue);border:none;border-radius:10px;padding:11px;color:#fff;cursor:pointer;font-size:12px;font-weight:700;letter-spacing:0.03em;text-align:center;text-decoration:none;box-sizing:border-box">Choisir PRO →</a>
           <div style="margin-top:12px">
             <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:7px;text-align:center">Paiement sécurisé</div>
             <div style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap">
@@ -1390,7 +1390,7 @@ tr:hover td { background:rgba(255,255,255,0.02); }
             <div style="display:flex;align-items:center;gap:8px;font-size:12px"><span style="color:var(--gold);font-weight:700;font-size:14px">✓</span> Support prioritaire dédié</div>
             <div style="display:flex;align-items:center;gap:8px;font-size:12px"><span style="color:var(--gold);font-weight:700;font-size:14px">✓</span> Accès beta nouvelles fonctions</div>
           </div>
-          <button style="width:100%;background:linear-gradient(135deg,var(--gold),#FF8C42);border:none;border-radius:10px;padding:11px;color:#000;cursor:pointer;font-size:12px;font-weight:700;letter-spacing:0.03em">Passer VIP ⭐</button>
+          <a href="https://uazgnjsa.mychariow.shop/prd_l1336b" target="_blank" style="display:block;width:100%;background:linear-gradient(135deg,var(--gold),#FF8C42);border:none;border-radius:10px;padding:11px;color:#000;cursor:pointer;font-size:12px;font-weight:700;letter-spacing:0.03em;text-align:center;text-decoration:none;box-sizing:border-box">Passer VIP ⭐</a>
           <div style="margin-top:12px">
             <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:7px;text-align:center">Paiement sécurisé</div>
             <div style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap">
@@ -1412,7 +1412,7 @@ tr:hover td { background:rgba(255,255,255,0.02); }
         <div style="font-size:12px;font-weight:700;margin-bottom:2px">Paiement via <strong style="color:var(--green)">Chariow.com</strong> — Solution de paiement internationale</div>
         <div style="font-size:11px;color:var(--muted)">Accepté pour les plans PRO et VIP · Paiement sécurisé · Mobile Money · Cartes internationales</div>
       </div>
-      <a href="https://chariow.com" target="_blank" style="margin-left:auto;background:rgba(0,214,143,0.12);border:1px solid rgba(0,214,143,0.3);border-radius:8px;padding:7px 14px;font-size:11px;font-weight:700;color:var(--green);text-decoration:none;white-space:nowrap">Voir Chariow →</a>
+      <a href="https://uazgnjsa.mychariow.shop" target="_blank" style="margin-left:auto;background:rgba(0,214,143,0.12);border:1px solid rgba(0,214,143,0.3);border-radius:8px;padding:7px 14px;font-size:11px;font-weight:700;color:var(--green);text-decoration:none;white-space:nowrap">Voir Chariow →</a>
     </div>
 
     <div class="page-footer">TurfAI Pro · Paris hippiques responsables · 18+ · ANJ · anj.fr</div>
@@ -1972,6 +1972,7 @@ function initBases() {
     ).join('');
     renderBasesResult(mode);
   });
+  initMyCombos();
 }
 function basesTab(id, el) {
   document.querySelectorAll('.bases-tab').forEach(t=>t.classList.remove('active'));
@@ -2256,15 +2257,6 @@ function cgBuild() {
       </div>
     </div>`;
 }
-
-// Init at load
-buildAnalyseTable();
-buildMCBars();
-buildHistorique();
-buildBilan();
-initBases();
-cgBuild();
-animateBars();
 
 /* ══════════════════════════════════════════
    MES COMBOS — Créateur de combinaisons perso
@@ -2578,11 +2570,16 @@ function shareOn(platform) {
   if (urls[platform]) window.open(urls[platform], '_blank');
 }
 
-// Init Mes Combos quand la page bases est ouverte
-const _origInitBases = initBases;
-function initBases() { _origInitBases(); initMyCombos(); }
-initMyCombos();
 buildAffiliation();
+
+// Init at load
+buildAnalyseTable();
+buildMCBars();
+buildHistorique();
+buildBilan();
+initBases();
+cgBuild();
+animateBars();
 </script>
 </body>
 </html>
