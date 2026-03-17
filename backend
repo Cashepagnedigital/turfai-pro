@@ -1,0 +1,212 @@
+from fastapi import FastAPI, Request
+from datetime import datetime, timedelta
+import json
+import random
+import os
+
+app = FastAPI()
+
+DB_FILE = "users.json"
+
+# =========================
+# 📁 DATABASE
+# =========================
+
+def load_users():
+    if not os.path.exists(DB_FILE):
+        return {}
+    with open(DB_FILE, "r") as f:
+        return json.load(f)
+
+def save_users(data):
+    with open(DB_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+# =========================
+# 🧠 IA TURF (PROPRE)
+# =========================
+
+def generate_horses():
+    horses = []
+    for i in range(1, 21):
+        horses.append({
+            "numero": i,
+            "forme": random.randint(1, 10),
+            "corde": random.randint(1, 20),
+            "poids": random.randint(52, 62),
+            "jockey": random.randint(1, 10)
+        })
+    return horses
+
+def score(h):
+    return (
+        (10 - h["forme"]) * 2 +
+        (20 - h["corde"]) +
+        (62 - h["poids"]) +
+        (h["jockey"] * 2)
+    )
+
+def predict_quinte():
+    horses = generate_horses()
+    results = []
+
+    for _ in range(200):  # Monte Carlo
+        temp = []
+        for h in horses:
+            variation = random.uniform(-5, 5)
+            temp.append((h["numero"], score(h) + variation))
+        temp.sort(key=lambda x: x[1], reverse=True)
+        results.append([x[0] for x in temp[:5]])
+
+    freq = {}
+    for race in results:
+        for i, cheval in enumerate(race):
+            freq[cheval] = freq.get(cheval, 0) + (5 - i)
+
+    final = sorted(freq.items(), key=lambda x: x[1], reverse=True)
+    return [x[0] for x in final[:5]]
+
+# =========================
+# 🏇 ROUTES PUBLIQUES
+# =========================
+
+@app.get("/")
+def home():
+    return {"status": "TurfAI Pro backend actif"}
+
+@app.get("/quinte")
+def quinte():
+    return {"prediction": predict_quinte()}
+
+# =========================
+# 🔐 PREMIUM + ANTI PARTAGE
+# =========================
+
+@app.get("/premium")
+def premium(key: str, request: Request):
+    users = load_users()
+
+    if key not in users:
+        return {"error": "clé invalide"}
+
+    user = users[key]
+
+    expire = datetime.fromisoformat(user["expires"])
+    if expire < datetime.now():
+        return {"error": "abonnement expiré"}
+
+    user_ip = request.client.host
+
+    # anti partage (max 2 appareils)
+    if "ips" not in user:
+        user["ips"] = []
+
+    if user_ip not in user["ips"]:
+        if len(user["ips"]) >= 2:
+            return {"error": "limite appareils atteinte"}
+        user["ips"].append(user_ip)
+
+    save_users(users)
+
+    return {"access": True, "prediction": predict_quinte()}
+
+# =========================
+# 💳 PAIEMENT + PARRAINAGE
+# =========================
+
+@app.post("/payment-success")
+async def payment_success(request: Request):
+    data = await request.json()
+
+    users = load_users()
+
+    user_id = data.get("user_id")
+    ref = data.get("ref_code")
+
+    if not user_id:
+        return {"error": "user_id requis"}
+
+    now = datetime.now()
+
+    if user_id not in users:
+        users[user_id] = {
+            "expires": (now + timedelta(days=7)).isoformat(),
+            "referrals": 0,
+            "gains": 0
+        }
+    else:
+        users[user_id]["expires"] = (
+            datetime.fromisoformat(users[user_id]["expires"]) + timedelta(days=7)
+        ).isoformat()
+
+    # 🎯 parrainage
+    if ref and ref in users:
+        users[ref]["referrals"] += 1
+
+        # 🎁 bonus automatique
+        if users[ref]["referrals"] == 5:
+            users[ref]["expires"] = (
+                datetime.fromisoformat(users[ref]["expires"]) + timedelta(days=7)
+            ).isoformat()
+
+    save_users(users)
+
+    return {"status": "paiement validé"}
+
+# =========================
+# 📊 STATS UTILISATEUR
+# =========================
+
+@app.get("/user-stats")
+def user_stats(key: str):
+    users = load_users()
+
+    if key not in users:
+        return {"referrals": 0, "gains": 0}
+
+    return {
+        "referrals": users[key].get("referrals", 0),
+        "gains": users[key].get("gains", 0)
+    }
+
+# =========================
+# 🔐 ADMIN
+# =========================
+
+ADMIN_KEY = "ADMIN123"
+
+@app.get("/admin/stats")
+def admin_stats(admin_key: str):
+    if admin_key != ADMIN_KEY:
+        return {"error": "accès refusé"}
+
+    users = load_users()
+
+    total = len(users)
+    actifs = 0
+
+    for u in users.values():
+        if datetime.fromisoformat(u["expires"]) > datetime.now():
+            actifs += 1
+
+    revenus = total * 3000
+
+    return {
+        "total_users": total,
+        "active_users": actifs,
+        "revenus_estimes": revenus
+    }
+
+@app.get("/admin/users")
+def admin_users(admin_key: str):
+    if admin_key != ADMIN_KEY:
+        return {"error": "accès refusé"}
+
+    return load_users()
+fastapi
+uvicorn
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "uvicorn main:app --host 0.0.0.0 --port 8000"
