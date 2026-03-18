@@ -119,3 +119,18 @@ async def payment_success(request: Request):
 @app.get("/")
 def home():
     return {"status": "TurfAI Pro Backend OK"}
+    from fastapi import FastAPI
+import random
+
+app = FastAPI()
+
+@app.get("/")
+def home():
+    return {"status": "TurfAI Pro Backend OK"}
+
+# ✅ ROUTE MANQUANTE (LE PROBLÈME EST ICI)
+@app.get("/quinte")
+def quinte():
+    chevaux = list(range(1, 21))
+    random.shuffle(chevaux)
+    return {"prediction": chevaux[:5]}
