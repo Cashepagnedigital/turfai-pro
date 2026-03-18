@@ -21,10 +21,11 @@ h1 { color: #22c55e; margin-top: 20px; }
 .container { max-width: 500px; margin: auto; }
 
 .card {
-    background: rgba(30, 41, 59, 0.95);
+    background: rgba(30, 41, 59, 0.9);
     padding: 20px;
     margin: 15px;
     border-radius: 15px;
+    box-shadow: 0 0 20px rgba(0,255,100,0.1);
 }
 
 button {
@@ -35,7 +36,11 @@ button {
     cursor: pointer;
     font-weight: bold;
     border-radius: 8px;
-    width: 90%;
+}
+
+.pay-btn {
+    background: linear-gradient(90deg, #facc15, #eab308);
+    color: black;
 }
 
 input {
@@ -46,117 +51,165 @@ input {
     margin: 10px;
 }
 
-.highlight { color: #4ade80; font-weight: bold; }
+.highlight {
+    color: #4ade80;
+    font-weight: bold;
+}
 </style>
 </head>
 
 <body>
 
 <h1>🏇 TurfAI Pro</h1>
-<p>🔥 Gagne au Quinté+ avec l'IA</p>
+<p>🔥 Gagne au Quinté+ avec l'Intelligence Artificielle</p>
 
 <div class="container">
 
 <div class="card">
-    <h2>📊 Prédictions</h2>
-    <button onclick="loadPrediction()">Voir</button>
-    <p id="prediction"></p>
+    <h2>📊 Prédictions du Jour</h2>
+    <button onclick="loadPrediction()">Voir les chevaux gagnants</button>
+    <p id="prediction">Clique pour voir...</p>
+</div>
+
+<div class="card">
+    <h2>💳 Devenir VIP</h2>
+    <p class="highlight">Accès complet + pronostics premium</p>
+
+    <button class="pay-btn" onclick="payer()">🔥 Devenir VIP maintenant</button>
+
+    <p style="font-size: 12px;">Paiement sécurisé Mobile Money</p>
 </div>
 
 <div class="card">
     <h2>🔐 Accès VIP</h2>
-    <input type="text" id="userKeyInput" placeholder="Ta clé VIP">
+    <input type="text" id="userKeyInput" placeholder="Entrer votre clé VIP">
     <button onclick="checkPremium()">Accéder</button>
     <p id="premiumResult"></p>
 </div>
 
 <div class="card">
-    <h2>💳 Abonnement VIP</h2>
-    <p>6500 FCFA / mois</p>
-    <button onclick="pay()">💰 Payer maintenant</button>
-</div>
-
-<div class="card">
     <h2>💰 Parrainage</h2>
+
+    <p class="highlight">Invite tes amis et gagne des jours VIP GRATUITS 🔥</p>
+
+    <p><b>Ton lien :</b></p>
     <p id="aff-link"></p>
-    <button onclick="copyLink()">Copier</button>
-    <button onclick="shareWhatsApp()">WhatsApp</button>
-    <p>👥 <span id="aff-filleuls">0</span></p>
+
+    <button onclick="copyLink()">📋 Copier</button>
+    <button onclick="shareWhatsApp()">📲 WhatsApp</button>
+
+    <hr>
+
+    <p>👥 Filleuls : <span id="aff-filleuls">0</span></p>
+    <p>💰 Gains : <span id="aff-gains">0 FCFA</span></p>
 </div>
 
 </div>
 
 <script>
-const API_URL = "https://turfai-pro-production.up.railway.app"; //
+// CONFIG
+const API_URL = "https://turfai-production.up.railway.app";
+const PAYMENT_URL = "https://uazgnjsa.mychariow.shop/prd_l1336b";
 
+// USER KEY
 let userKey = localStorage.getItem("user_key");
 if (!userKey) {
     userKey = "user_" + Math.random().toString(36).substring(2, 10);
     localStorage.setItem("user_key", userKey);
 }
 
-// récupérer ref
+// LIEN PARRAINAGE
+const AFF_DATA = {
+    link: `${window.location.origin}?ref=${userKey}`
+};
+
+// RECUP CODE PARRAIN
 const params = new URLSearchParams(window.location.search);
 const ref = params.get("ref");
 if (ref) localStorage.setItem("ref_code", ref);
 
-// lien affilié
-const AFF_LINK = `${window.location.origin}?ref=${userKey}`;
+// PAIEMENT
+function payer() {
+    const ref_code = localStorage.getItem("ref_code") || "";
 
-// paiement
-function pay() {
-    const ref = localStorage.getItem("ref_code") || "";
-    const url = "https://uazgnjsa.mychariow.shop/prd_l1336b";
+    // Ajout du parrain au lien
+    const url = PAYMENT_URL + "?ref=" + ref_code;
 
-    window.location.href = url + "?user_id=" + userKey + "&ref=" + ref;
+    window.location.href = url;
 }
 
-// prédiction
-function loadPrediction() {
-    fetch(`${API_URL}/quinte-pro`)
-    .then(r => r.json())
-    .then(d => {
+// STATS
+async function loadStats() {
+    try {
+        const res = await fetch(`${API_URL}/user-stats?key=${userKey}`);
+        const data = await res.json();
+
+        document.getElementById("aff-filleuls").innerText = data.referrals || 0;
+        document.getElementById("aff-gains").innerText = (data.gains || 0) + " FCFA";
+    } catch {}
+}
+
+// PREDICTION
+async function loadPrediction() {
+    document.getElementById("prediction").innerText = "Chargement...";
+    try {
+        const res = await fetch(`${API_URL}/quinte`);
+        const data = await res.json();
+
         document.getElementById("prediction").innerText =
-        "🏇 " + d.top5.join(" - ");
-    });
+            "🏇 " + data.prediction.join(" - ");
+    } catch {
+        document.getElementById("prediction").innerText = "Erreur serveur";
+    }
 }
 
-// premium
-function checkPremium() {
+// PREMIUM
+async function checkPremium() {
     const key = document.getElementById("userKeyInput").value;
-    fetch(`${API_URL}/premium?key=${key}`)
-    .then(r => r.json())
-    .then(d => {
-        document.getElementById("premiumResult").innerText =
-        d.access ? "Accès OK" : "Refusé";
-    });
+
+    document.getElementById("premiumResult").innerText = "Vérification...";
+
+    try {
+        const res = await fetch(`${API_URL}/premium?key=${key}`);
+        const data = await res.json();
+
+        if (data.error) {
+            document.getElementById("premiumResult").innerText = "❌ " + data.error;
+        } else {
+            document.getElementById("premiumResult").innerText =
+                "✅ " + data.prediction.join(" - ");
+        }
+    } catch {
+        document.getElementById("premiumResult").innerText = "Erreur serveur";
+    }
 }
 
-// stats
-function loadStats() {
-    fetch(`${API_URL}/user-stats?key=${userKey}`)
-    .then(r => r.json())
-    .then(d => {
-        document.getElementById("aff-filleuls").innerText = d.referrals;
-    });
-}
-
-// share
+// WHATSAPP
 function shareWhatsApp() {
-    window.open("https://wa.me/?text=" + encodeURIComponent(AFF_LINK));
+    const message = `🏇 TurfAI Pro IA 🔥
+
+Gagne au Quinté+ facilement
+
+🎁 Accès ici :
+${AFF_DATA.link}
+
+💰 Invite et gagne des bonus !`;
+
+    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`);
 }
 
-// copy
+// COPY
 function copyLink() {
-    navigator.clipboard.writeText(AFF_LINK);
-    alert("Copié !");
+    navigator.clipboard.writeText(AFF_DATA.link);
+    alert("Lien copié !");
 }
 
+// INIT
 window.onload = () => {
-    document.getElementById("aff-link").innerText = AFF_LINK;
+    document.getElementById("aff-link").innerText = AFF_DATA.link;
     loadStats();
 };
 </script>
 
 </body>
-</html>
+ </html>
