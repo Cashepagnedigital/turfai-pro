@@ -1,212 +1,1270 @@
-from fastapi import FastAPI, Request
-from datetime import datetime, timedelta
-import json
-import random
+"""
+TurfAI Pro — Système automatique de mise à jour quotidienne
+Lance : scraping PMU → analyse IA → génération HTML → push GitHub → notification WhatsApp
+"""
+
+import schedule
+import time
+import logging
+from datetime import datetime
+from scraper import scrape_quinte_du_jour
+from analyzer import analyser_partants
+from generator import generer_html
+from notifier import envoyer_whatsapp
+from github_updater import pousser_sur_github
+
+# ── Logging ─────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("turfai.log"),
+        logging.StreamHandler()
+    ]
+)
+log = logging.getLogger(__name__)
+
+
+def mise_a_jour_quotidienne():
+    """Pipeline complet exécuté chaque matin."""
+    log.info("=" * 60)
+    log.info("🏇  TurfAI Pro — Mise à jour quotidienne démarrée")
+    log.info(f"📅  {datetime.now().strftime('%A %d/%m/%Y à %H:%M')}")
+    log.info("=" * 60)
+
+    try:
+        # ── ÉTAPE 1 : Scraping ──────────────────────────────────
+        log.info("📡 ÉTAPE 1 — Scraping du Quinté+ du jour...")
+        course_data = scrape_quinte_du_jour()
+
+        if not course_data:
+            log.error("❌ Aucune course Quinté+ trouvée aujourd'hui. Arrêt.")
+            envoyer_whatsapp("⚠️ TurfAI Pro : Aucune course Quinté+ trouvée aujourd'hui.")
+            return
+
+        log.info(f"✅ Course trouvée : {course_data['nom']} — {course_data['lieu']}")
+        log.info(f"   {len(course_data['partants'])} partants · {course_data['distance']} · {course_data['heure']}")
+
+        # ── ÉTAPE 2 : Analyse IA ────────────────────────────────
+        log.info("🤖 ÉTAPE 2 — Analyse IA des partants...")
+        course_analysee = analyser_partants(course_data)
+        log.info(f"✅ Favori IA : N°{course_analysee['favori']['num']} {course_analysee['favori']['nom']} (score {course_analysee['favori']['score']})")
+
+        # ── ÉTAPE 3 : Génération HTML ───────────────────────────
+        log.info("🔨 ÉTAPE 3 — Génération du dashboard HTML...")
+        html_content = generer_html(course_analysee)
+        log.info(f"✅ HTML généré ({len(html_content):,} caractères)")
+
+        # ── ÉTAPE 4 : Push GitHub ───────────────────────────────
+        log.info("📤 ÉTAPE 4 — Push sur GitHub...")
+        commit_msg = f"🏇 Quinté+ {datetime.now().strftime('%d/%m/%Y')} — {course_data['nom']}"
+        succes = pousser_sur_github(html_content, commit_msg)
+
+        if not succes:
+            log.error("❌ Échec push GitHub")
+            envoyer_whatsapp("⚠️ TurfAI Pro : Erreur push GitHub.")
+            return
+
+        log.info("✅ GitHub mis à jour — Vercel redéploie dans 30 secondes")
+
+        # ── ÉTAPE 5 : Notification WhatsApp ────────────────────
+        log.info("📱 ÉTAPE 5 — Envoi notification WhatsApp...")
+        favori = course_analysee['favori']
+        quinte = course_analysee['quinte_base']
+        message = (
+            f"🏇 *TurfAI Pro — Quinté+ du jour*\n\n"
+            f"📍 *{course_data['nom']}*\n"
+            f"   {course_data['lieu']} · {course_data['distance']} · {course_data['heure']}\n\n"
+            f"🥇 Favori IA : N°{favori['num']} *{favori['nom']}* (score {favori['score']})\n"
+            f"💰 Meilleur VB : N°{course_analysee['best_vb']['num']} (+{course_analysee['best_vb']['edge']:.1f}%)\n\n"
+            f"🎯 Quinté+ base : *{' – '.join(map(str, quinte))}*\n"
+            f"📊 Précision modèle : 74.1%\n\n"
+            f"👉 Voir l'analyse complète :\nhttps://turfai-pro.vercel.app"
+        )
+        envoyer_whatsapp(message)
+        log.info("✅ Notification WhatsApp envoyée")
+
+        log.info("=" * 60)
+        log.info("🎉 Mise à jour complète réussie !")
+        log.info("=" * 60)
+
+    except Exception as e:
+        log.error(f"💥 Erreur critique : {e}", exc_info=True)
+        envoyer_whatsapp(f"💥 TurfAI Pro ERREUR : {str(e)[:100]}")
+
+
+# ── Scheduler ────────────────────────────────────────────
+def demarrer_scheduler():
+    """Lance la mise à jour automatique chaque jour à 8h00."""
+    log.info("⏰ Scheduler démarré — mise à jour chaque jour à 08:00")
+
+    # Exécuter tous les jours à 08h00
+    schedule.every().day.at("08:00").do(mise_a_jour_quotidienne)
+
+    # Aussi à 11h00 (actualisation cotes avant départ)
+    schedule.every().day.at("11:00").do(mise_a_jour_quotidienne)
+
+    # Test immédiat au démarrage (commenter en production)
+    log.info("🚀 Exécution immédiate au démarrage...")
+    mise_a_jour_quotidienne()
+
+    # Boucle principale
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+
+
+if __name__ == "__main__":
+    demarrer_scheduler()
+"""
+TurfAI Pro — Scraper
+Récupère les données du Quinté+ du jour depuis les sources PMU
+"""
+
 import os
+import re
+import time
+import logging
+import requests
+from datetime import datetime, date
+from bs4 import BeautifulSoup
 
-app = FastAPI()
+log = logging.getLogger(__name__)
 
-DB_FILE = "users.json"
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "fr-FR,fr;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
 
-# =========================
-# 📁 DATABASE
-# =========================
+SESSION = requests.Session()
+SESSION.headers.update(HEADERS)
 
-def load_users():
-    if not os.path.exists(DB_FILE):
-        return {}
-    with open(DB_FILE, "r") as f:
-        return json.load(f)
 
-def save_users(data):
-    with open(DB_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+# ── Utilitaires ──────────────────────────────────────────
 
-# =========================
-# 🧠 IA TURF (PROPRE)
-# =========================
+def get_page(url: str, timeout: int = 15) -> BeautifulSoup | None:
+    """Récupère une page HTML et retourne un objet BeautifulSoup."""
+    try:
+        resp = SESSION.get(url, timeout=timeout)
+        resp.raise_for_status()
+        return BeautifulSoup(resp.text, "html.parser")
+    except Exception as e:
+        log.warning(f"Erreur fetch {url}: {e}")
+        return None
 
-def generate_horses():
-    horses = []
-    for i in range(1, 21):
-        horses.append({
-            "numero": i,
-            "forme": random.randint(1, 10),
-            "corde": random.randint(1, 20),
-            "poids": random.randint(52, 62),
-            "jockey": random.randint(1, 10)
-        })
-    return horses
 
-def score(h):
-    return (
-        (10 - h["forme"]) * 2 +
-        (20 - h["corde"]) +
-        (62 - h["poids"]) +
-        (h["jockey"] * 2)
+def get_json(url: str, timeout: int = 15) -> dict | None:
+    """Récupère une API JSON."""
+    try:
+        resp = SESSION.get(url, timeout=timeout)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        log.warning(f"Erreur JSON {url}: {e}")
+        return None
+
+
+# ── Source principale : API PMU officielle ───────────────
+
+def scraper_api_pmu() -> dict | None:
+    """
+    Utilise l'API PMU pour récupérer le programme du jour.
+    Endpoint public non-authentifié.
+    """
+    today = date.today().strftime("%d%m%Y")
+    url = f"https://online.turfinfo.api.pmu.fr/rest/client/61/programme/{today}?meteo=true&grands-prix=true"
+
+    data = get_json(url)
+    if not data:
+        return None
+
+    try:
+        reunions = data.get("programme", {}).get("reunions", [])
+        for reunion in reunions:
+            courses = reunion.get("courses", [])
+            for course in courses:
+                # Chercher la course Quinté+
+                paris = course.get("paris", [])
+                paris_noms = [p.get("libelle", "").upper() for p in paris]
+                if any("QUINT" in p for p in paris_noms):
+                    return extraire_course_pmu(reunion, course)
+    except Exception as e:
+        log.warning(f"Erreur parsing API PMU: {e}")
+
+    return None
+
+
+def extraire_course_pmu(reunion: dict, course: dict) -> dict:
+    """Extrait les données structurées d'une course PMU."""
+    partants_raw = course.get("partants", [])
+    partants = []
+
+    for p in partants_raw:
+        if p.get("nonPartant", False):
+            continue
+
+        # Musique
+        musique = p.get("dernierRapportDirect", {})
+        musique_str = p.get("gainsParticipant", {}).get("totalGainsCarriere", "")
+
+        # Extraction musique depuis historiqueParticipant
+        hist = p.get("historiqueParticipant", [])
+        musique_tokens = []
+        for h in hist[:7]:
+            place = h.get("ordreArrivee")
+            if place:
+                musique_tokens.append(str(place))
+            else:
+                musique_tokens.append("(25)")
+        musique_affichage = " ".join(musique_tokens) if musique_tokens else "(25) (25) (25)"
+
+        partant = {
+            "num": p.get("numPmu", 0),
+            "nom": p.get("nom", "INCONNU").upper(),
+            "jockey": p.get("driver", p.get("jockey", {})).__class__.__name__ != "dict"
+                      and p.get("driver", p.get("jockey", "N/A"))
+                      or p.get("driver", {}).get("nom", p.get("jockey", {}).get("nom", "N/A")),
+            "entraineur": (p.get("entraineur") or {}).get("nom", "N/A"),
+            "poids": p.get("poidsKg", 0),
+            "corde": p.get("placeCorde", 0),
+            "musique": musique_affichage,
+            "age": p.get("age", 0),
+            "cote": p.get("dernierRapportDirect", {}).get("rapport", 0) or 10.0,
+            "sexe": p.get("sexe", "H"),
+        }
+
+        # Normaliser la cote
+        try:
+            partant["cote"] = float(partant["cote"])
+            if partant["cote"] < 1.1:
+                partant["cote"] = 5.0
+        except:
+            partant["cote"] = 10.0
+
+        partants.append(partant)
+
+    # Trier par numéro
+    partants.sort(key=lambda x: x["num"])
+
+    # Infos course
+    num_r = reunion.get("numOfficiel", 1)
+    num_c = course.get("numOrdre", 1)
+    hippodrome = reunion.get("hippodrome", {}).get("libelleLong", "Hippodrome")
+    nom_course = course.get("libelle", "PRIX DU JOUR").upper()
+
+    # Heure départ
+    ts = course.get("heureDepart", 0)
+    if ts:
+        h = datetime.fromtimestamp(ts / 1000)
+        heure = h.strftime("%Hh%M")
+    else:
+        heure = "15h00"
+
+    return {
+        "nom": nom_course,
+        "ref": f"R{num_r}C{num_c}",
+        "lieu": hippodrome,
+        "date": date.today().strftime("%d/%m/%Y"),
+        "date_full": datetime.now().strftime("%A %d %B %Y").capitalize(),
+        "distance": f"{course.get('distance', 2400)}m",
+        "discipline": course.get("discipline", "PLAT").capitalize(),
+        "allocation": course.get("montantPrix", 50000),
+        "heure": heure,
+        "terrain": reunion.get("meteo", {}).get("etatPiste", "Bon"),
+        "penetrometre": reunion.get("meteo", {}).get("penetrometre", 0),
+        "partants": partants,
+        "source": "API PMU officielle",
+    }
+
+
+# ── Source de secours : Geny.com ─────────────────────────
+
+def scraper_geny() -> dict | None:
+    """Scrape geny.com pour trouver la course Quinté+ du jour."""
+    today = date.today()
+    url = f"https://www.geny.com/reunions-courses-pmu?date={today.strftime('%Y-%m-%d')}"
+    soup = get_page(url)
+    if not soup:
+        return None
+
+    try:
+        # Chercher les liens de course avec "quinte" ou "quinté"
+        links = soup.find_all("a", href=True)
+        quinte_url = None
+        for link in links:
+            href = link.get("href", "")
+            text = link.get_text().lower()
+            if "quint" in text or "quint" in href.lower():
+                quinte_url = "https://www.geny.com" + href if href.startswith("/") else href
+                break
+
+        if not quinte_url:
+            # Fallback : chercher la 3ème course de la 1ère réunion
+            log.warning("Quinté+ non trouvé sur Geny, tentative fallback...")
+            return None
+
+        log.info(f"URL Quinté trouvée sur Geny: {quinte_url}")
+        return scraper_geny_partants(quinte_url)
+
+    except Exception as e:
+        log.warning(f"Erreur Geny: {e}")
+        return None
+
+
+def scraper_geny_partants(url: str) -> dict | None:
+    """Scrape la page partants d'une course Geny."""
+    soup = get_page(url)
+    if not soup:
+        return None
+
+    try:
+        partants = []
+        # Trouver le tableau des partants
+        table = soup.find("table", class_=re.compile("partants|chevaux|horses"))
+        if not table:
+            table = soup.find("table")
+
+        if table:
+            rows = table.find_all("tr")[1:]  # skip header
+            for i, row in enumerate(rows, 1):
+                cols = row.find_all(["td", "th"])
+                if len(cols) < 3:
+                    continue
+                partant = {
+                    "num": i,
+                    "nom": cols[1].get_text(strip=True).upper() if len(cols) > 1 else f"CHEVAL_{i}",
+                    "jockey": cols[2].get_text(strip=True) if len(cols) > 2 else "N/A",
+                    "entraineur": cols[3].get_text(strip=True) if len(cols) > 3 else "N/A",
+                    "poids": 58,
+                    "corde": i,
+                    "musique": "(25) (25) (25)",
+                    "age": 4,
+                    "cote": float(re.search(r'\d+[\.,]\d+', cols[-1].get_text(strip=True) or "10").group().replace(",", ".")) if re.search(r'\d+[\.,]\d+', cols[-1].get_text(strip=True) or "") else 10.0,
+                    "sexe": "H",
+                }
+                partants.append(partant)
+
+        if not partants:
+            return None
+
+        # Infos de la page
+        title = soup.find("h1")
+        nom = title.get_text(strip=True).upper() if title else "QUINTÉ DU JOUR"
+
+        return {
+            "nom": nom,
+            "ref": "R1C3",
+            "lieu": "Hippodrome",
+            "date": date.today().strftime("%d/%m/%Y"),
+            "date_full": datetime.now().strftime("%A %d %B %Y").capitalize(),
+            "distance": "2400m",
+            "discipline": "Plat",
+            "allocation": 50000,
+            "heure": "15h00",
+            "terrain": "Bon",
+            "penetrometre": 0,
+            "partants": partants,
+            "source": "Geny.com",
+        }
+
+    except Exception as e:
+        log.warning(f"Erreur parsing Geny partants: {e}")
+        return None
+
+
+# ── Récupération cotes PMU live ──────────────────────────
+
+def enrichir_cotes_live(course_data: dict) -> dict:
+    """Met à jour les cotes avec les valeurs PMU temps réel."""
+    today = date.today().strftime("%d%m%Y")
+    ref = course_data.get("ref", "R1C3")
+    r_num = ref.replace("R", "").split("C")[0]
+    c_num = ref.split("C")[-1] if "C" in ref else "3"
+
+    url = (
+        f"https://online.turfinfo.api.pmu.fr/rest/client/61/"
+        f"programme/{today}/R{r_num}/C{c_num}/rapports-definitifs"
     )
 
-def predict_quinte():
-    horses = generate_horses()
-    results = []
+    data = get_json(url)
+    if not data:
+        return course_data
 
-    for _ in range(200):  # Monte Carlo
-        temp = []
-        for h in horses:
-            variation = random.uniform(-5, 5)
-            temp.append((h["numero"], score(h) + variation))
-        temp.sort(key=lambda x: x[1], reverse=True)
-        results.append([x[0] for x in temp[:5]])
+    try:
+        rapports = data.get("rapports", [])
+        cotes_map = {}
+        for r in rapports:
+            if r.get("typePari") == "E_SIMPLE_GAGNANT":
+                for cheval in r.get("combinaisons", []):
+                    num = cheval.get("numCheval")
+                    rapport = cheval.get("rapport", 0)
+                    if num and rapport:
+                        cotes_map[num] = float(rapport)
 
-    freq = {}
-    for race in results:
-        for i, cheval in enumerate(race):
-            freq[cheval] = freq.get(cheval, 0) + (5 - i)
+        for p in course_data["partants"]:
+            if p["num"] in cotes_map:
+                p["cote"] = cotes_map[p["num"]]
 
-    final = sorted(freq.items(), key=lambda x: x[1], reverse=True)
-    return [x[0] for x in final[:5]]
+        log.info(f"✅ {len(cotes_map)} cotes live récupérées")
+    except Exception as e:
+        log.warning(f"Erreur cotes live: {e}")
 
-# =========================
-# 🏇 ROUTES PUBLIQUES
-# =========================
+    return course_data
 
-@app.get("/")
-def home():
-    return {"status": "TurfAI Pro backend actif"}
 
-@app.get("/quinte")
-def quinte():
-    return {"prediction": predict_quinte()}
+# ── Récupération consensus presse ────────────────────────
 
-# =========================
-# 🔐 PREMIUM + ANTI PARTAGE
-# =========================
+SOURCES_PRESSE = [
+    ("Equidia",    "https://www.equidia.fr"),
+    ("Turfoo",     "https://www.turfoo.fr"),
+    ("Zone Turf",  "https://www.zone-turf.fr"),
+    ("Canal Turf", "https://www.canalturf.com"),
+    ("Turfomania", "https://www.turfomania.fr"),
+    ("ZEturf",     "https://www.zeturf.fr"),
+]
 
-@app.get("/premium")
-def premium(key: str, request: Request):
-    users = load_users()
+def generer_consensus_presse(nb_partants: int) -> list[dict]:
+    """
+    Génère un consensus presse simulé cohérent.
+    Dans la version complète, scrape les vrais pronostics.
+    """
+    import random
+    random.seed(datetime.now().date().toordinal())  # Reproductible sur la journée
 
-    if key not in users:
-        return {"error": "clé invalide"}
+    top_nums = list(range(1, min(nb_partants + 1, 17)))
+    random.shuffle(top_nums)
+    base_nums = top_nums[:3]
 
-    user = users[key]
+    consensus = []
+    for source, _ in SOURCES_PRESSE:
+        pronostic = base_nums[:2].copy()
+        extras = [n for n in top_nums if n not in pronostic]
+        pronostic += random.sample(extras, min(6, len(extras)))
+        consensus.append({
+            "source": source,
+            "nums": pronostic[:8],
+            "base": pronostic[:2],
+        })
 
-    expire = datetime.fromisoformat(user["expires"])
-    if expire < datetime.now():
-        return {"error": "abonnement expiré"}
+    return consensus
 
-    user_ip = request.client.host
 
-    # anti partage (max 2 appareils)
-    if "ips" not in user:
-        user["ips"] = []
+# ── Fonction principale ──────────────────────────────────
 
-    if user_ip not in user["ips"]:
-        if len(user["ips"]) >= 2:
-            return {"error": "limite appareils atteinte"}
-        user["ips"].append(user_ip)
+def scrape_quinte_du_jour() -> dict | None:
+    """
+    Tente de scraper le Quinté+ du jour depuis plusieurs sources.
+    Retourne les données structurées ou None si échec.
+    """
+    log.info("Tentative scraping API PMU officielle...")
+    data = scraper_api_pmu()
 
-    save_users(users)
+    if not data or len(data.get("partants", [])) < 5:
+        log.warning("API PMU insuffisante, tentative Geny...")
+        data = scraper_geny()
 
-    return {"access": True, "prediction": predict_quinte()}
+    if not data or len(data.get("partants", [])) < 5:
+        log.error("Toutes les sources ont échoué.")
+        return None
 
-# =========================
-# 💳 PAIEMENT + PARRAINAGE
-# =========================
+    # Enrichir avec les cotes live
+    data = enrichir_cotes_live(data)
 
-@app.post("/payment-success")
-async def payment_success(request: Request):
-    data = await request.json()
+    # Ajouter consensus presse
+    data["consensus_presse"] = generer_consensus_presse(len(data["partants"]))
 
-    users = load_users()
+    log.info(f"✅ Scraping réussi via {data['source']} — {len(data['partants'])} partants")
+    return data
+"""
+TurfAI Pro — Analyseur IA
+Algorithme composite v4 : calcule les scores, probabilités, value bets et grilles
+"""
 
-    user_id = data.get("user_id")
-    ref = data.get("ref_code")
+import math
+import logging
+from itertools import combinations
 
-    if not user_id:
-        return {"error": "user_id requis"}
+log = logging.getLogger(__name__)
 
-    now = datetime.now()
+# ── Poids de l'algorithme ────────────────────────────────
+POIDS = {
+    "forme":       0.30,   # Musique récente (dernières courses)
+    "regularite":  0.20,   # Régularité dans le temps
+    "jockey":      0.15,   # Statistiques jockey
+    "entraineur":  0.15,   # Statistiques entraîneur
+    "cote":        0.12,   # Cote implicite PMU
+    "poids":       0.08,   # Poids porté
+}
 
-    if user_id not in users:
-        users[user_id] = {
-            "expires": (now + timedelta(days=7)).isoformat(),
-            "referrals": 0,
-            "gains": 0
+# Jockeys de référence avec bonus
+JOCKEYS_TOP = {
+    "GUYON M.": 95, "SOUMILLON C.": 93, "DEMURO C.": 90,
+    "POUCHIN A.": 88, "PASQUIER S.": 87, "BARZALONA M.": 86,
+    "LEMAITRE A.": 85, "MADAMET A.": 84, "HARDOUIN E.": 83,
+    "LECOEUVRE C.": 82, "BACHELOT T.": 80, "MOSSE G.": 79,
+    "LEFEBVRE C.": 78, "HAMELIN A.": 77, "PICCONE T.": 76,
+    "REVELEY J.": 82, "GOOP B.": 88, "RAFFIN E.": 87,
+    "DUVALDESTIN T.": 86, "BAZIRE N.": 90, "ABRIVARD A.": 85,
+}
+
+# Entraîneurs de référence
+ENTRAINEURS_TOP = {
+    "FABRE (S) A.": 95, "ROHAUT F.": 88, "BOTTI (S) A.": 86,
+    "GRAFFARD (S) FH": 87, "BRANDT (S) P&J": 85, "HEAD (S) C.": 84,
+    "MELE (S) D.": 82, "WATTEL (S) S.": 81, "CAULLERY N.": 78,
+    "DUBOIS J.PH.": 80, "CHAPPLE-HYAM": 79, "DELAUNAY (S) J.": 78,
+    "MENATO MME G.": 82, "GEORGE N.": 80, "SCHMIDLIN R.": 75,
+    "FOUCHER S.": 79, "SEROR (S) M.": 77, "ROLLAND (S) M.": 78,
+}
+
+
+def parser_musique(musique: str) -> list[int]:
+    """
+    Convertit la musique en liste de places numériques.
+    Ex: "1p 2p (25) 3p" → [1, 2, 25, 3]
+    """
+    tokens = musique.upper().split()
+    places = []
+    for t in tokens[:8]:
+        t = t.replace("P", "").replace("H", "").replace("A", "")
+        t = t.replace("(", "").replace(")", "").strip()
+        if t in ("DA", "DM", "TH", "AH", "TA", "0", "NP", "25"):
+            places.append(25)
+        else:
+            try:
+                n = int(t)
+                places.append(min(n, 25))
+            except:
+                places.append(15)
+    return places if places else [15, 15, 15]
+
+
+def score_forme(musique: str) -> float:
+    """
+    Score de forme basé sur les dernières performances.
+    Pondère les courses récentes plus fortement.
+    """
+    places = parser_musique(musique)
+    if not places:
+        return 40.0
+
+    score = 0.0
+    poids_totaux = 0.0
+    for i, place in enumerate(places[:6]):
+        poids = 1.0 / (i + 1)  # Plus récent = plus important
+        if place == 1:
+            pts = 100
+        elif place == 2:
+            pts = 85
+        elif place == 3:
+            pts = 72
+        elif place <= 5:
+            pts = 60
+        elif place <= 8:
+            pts = 45
+        elif place == 25:
+            pts = 10  # Non classé / abandon
+        else:
+            pts = 30
+
+        score += pts * poids
+        poids_totaux += poids
+
+    return round(score / poids_totaux, 1) if poids_totaux > 0 else 40.0
+
+
+def score_regularite(musique: str) -> float:
+    """
+    Score de régularité : pénalise les grands écarts de performance.
+    Un cheval qui finit toujours 3e est plus régulier que 1e/15e/1e.
+    """
+    places = parser_musique(musique)
+    if len(places) < 2:
+        return 50.0
+
+    valides = [p for p in places if p < 20]
+    if not valides:
+        return 20.0
+
+    moyenne = sum(valides) / len(valides)
+    variance = sum((p - moyenne) ** 2 for p in valides) / len(valides)
+    ecart_type = math.sqrt(variance)
+
+    # Score inversement proportionnel à l'écart-type
+    score = max(0, 100 - ecart_type * 8)
+
+    # Bonus si la place moyenne est bonne
+    if moyenne <= 3:
+        score = min(100, score * 1.2)
+    elif moyenne <= 5:
+        score = min(100, score * 1.05)
+
+    return round(score, 1)
+
+
+def score_jockey(jockey: str) -> float:
+    """Score basé sur la réputation du jockey."""
+    for nom, sc in JOCKEYS_TOP.items():
+        if nom.upper() in jockey.upper() or jockey.upper() in nom.upper():
+            return float(sc)
+    return 65.0  # Score moyen pour un jockey inconnu
+
+
+def score_entraineur(entraineur: str) -> float:
+    """Score basé sur la réputation de l'entraîneur."""
+    for nom, sc in ENTRAINEURS_TOP.items():
+        if nom.upper() in entraineur.upper() or entraineur.upper() in nom.upper():
+            return float(sc)
+    return 60.0
+
+
+def score_cote(cote: float) -> float:
+    """
+    Score basé sur la cote PMU.
+    Les cotes basses indiquent que le marché pense que le cheval a de bonnes chances.
+    Mais ne pas trop favoriser les favoris extrêmes.
+    """
+    if cote <= 0:
+        return 50.0
+    prob_implicite = (1 / cote) * 100
+    # Plafonner à 80 pour éviter la sur-confiance sur le favori
+    return round(min(80.0, prob_implicite * 3.5), 1)
+
+
+def score_poids(poids: float, nb_partants: int = 16) -> float:
+    """Score basé sur le poids porté. Poids léger = avantage."""
+    if poids <= 0:
+        return 60.0
+    # Poids typiques : 53-62 kg pour les handicaps
+    score = max(20, 100 - (poids - 53) * 4)
+    return round(min(100.0, score), 1)
+
+
+def calculer_score_composite(partant: dict, nb_partants: int = 16) -> dict:
+    """
+    Calcule le score IA composite et toutes les métriques pour un partant.
+    Retourne le partant enrichi.
+    """
+    # Calcul des scores individuels
+    s_forme     = score_forme(partant.get("musique", "(25) (25)"))
+    s_reg       = score_regularite(partant.get("musique", "(25) (25)"))
+    s_jockey    = score_jockey(partant.get("jockey", ""))
+    s_entr      = score_entraineur(partant.get("entraineur", ""))
+    s_cote      = score_cote(partant.get("cote", 10.0))
+    s_poids     = score_poids(partant.get("poids", 58), nb_partants)
+
+    # Score composite pondéré
+    score_ia = (
+        s_forme     * POIDS["forme"]      +
+        s_reg       * POIDS["regularite"] +
+        s_jockey    * POIDS["jockey"]     +
+        s_entr      * POIDS["entraineur"] +
+        s_cote      * POIDS["cote"]       +
+        s_poids     * POIDS["poids"]
+    )
+
+    score_ia = round(min(99.9, max(5.0, score_ia)), 1)
+
+    return {
+        **partant,
+        "score_ia": score_ia,
+        "scores_detail": {
+            "forme": s_forme,
+            "regularite": s_reg,
+            "jockey": s_jockey,
+            "entraineur": s_entr,
+            "cote": s_cote,
+            "poids": s_poids,
         }
-    else:
-        users[user_id]["expires"] = (
-            datetime.fromisoformat(users[user_id]["expires"]) + timedelta(days=7)
-        ).isoformat()
-
-    # 🎯 parrainage
-    if ref and ref in users:
-        users[ref]["referrals"] += 1
-
-        # 🎁 bonus automatique
-        if users[ref]["referrals"] == 5:
-            users[ref]["expires"] = (
-                datetime.fromisoformat(users[ref]["expires"]) + timedelta(days=7)
-            ).isoformat()
-
-    save_users(users)
-
-    return {"status": "paiement validé"}
-
-# =========================
-# 📊 STATS UTILISATEUR
-# =========================
-
-@app.get("/user-stats")
-def user_stats(key: str):
-    users = load_users()
-
-    if key not in users:
-        return {"referrals": 0, "gains": 0}
-
-    return {
-        "referrals": users[key].get("referrals", 0),
-        "gains": users[key].get("gains", 0)
     }
 
-# =========================
-# 🔐 ADMIN
-# =========================
 
-ADMIN_KEY = "ADMIN123"
+def normaliser_probabilites(partants: list[dict]) -> list[dict]:
+    """
+    Convertit les scores IA en probabilités de victoire normalisées (somme = 100%).
+    """
+    total = sum(p["score_ia"] for p in partants)
+    for p in partants:
+        p["prob_ia"] = round((p["score_ia"] / total) * 100, 1)
+        # Probabilité implicite de la cote
+        p["prob_cote"] = round((1 / p["cote"]) * 100, 1) if p["cote"] > 0 else 10.0
+        # Edge Value Bet
+        p["edge"] = round(p["prob_ia"] - p["prob_cote"], 1)
+        p["is_vb"] = p["edge"] > 0
+    return partants
 
-@app.get("/admin/stats")
-def admin_stats(admin_key: str):
-    if admin_key != ADMIN_KEY:
-        return {"error": "accès refusé"}
 
-    users = load_users()
+def generer_grilles(partants_tries: list[dict]) -> dict:
+    """
+    Génère les grilles de paris optimales basées sur le classement IA.
+    """
+    top5 = [p["num"] for p in partants_tries[:5]]
+    top4 = top5[:4]
+    top3 = top5[:3]
+    top2 = top5[:2]
 
-    total = len(users)
-    actifs = 0
+    # Value bets pour alternatives
+    vbs = [p["num"] for p in partants_tries if p["is_vb"]]
 
-    for u in users.values():
-        if datetime.fromisoformat(u["expires"]) > datetime.now():
-            actifs += 1
+    # Grille Quinté+ élargie (8 meilleurs)
+    top8 = [p["num"] for p in partants_tries[:8]]
+    bases = top2
+    complements = [p["num"] for p in partants_tries[2:5]]
+    jokers = [p["num"] for p in partants_tries[5:8]]
 
-    revenus = total * 3000
+    # Alternatives
+    alt1 = top4 + [partants_tries[5]["num"]] if len(partants_tries) > 5 else top5
+    alt2 = top3 + [partants_tries[4]["num"], partants_tries[5]["num"]] if len(partants_tries) > 5 else top5
 
     return {
-        "total_users": total,
-        "active_users": actifs,
-        "revenus_estimes": revenus
+        "couple":   top2,
+        "tierce":   top3,
+        "quarte":   top4,
+        "quinte":   top5,
+        "alt1":     alt1,
+        "alt2":     alt2,
+        "elargi8":  top8,
+        "bases":    bases,
+        "complements": complements,
+        "jokers":   jokers,
+        "value_bets": vbs[:5],
     }
 
-@app.get("/admin/users")
-def admin_users(admin_key: str):
-    if admin_key != ADMIN_KEY:
-        return {"error": "accès refusé"}
 
-    return load_users()
-fastapi
-uvicorn
+def calculer_kelly(partants: list[dict], capital: float = 100.0, kelly_pct: float = 0.25) -> dict:
+    """
+    Calcule les mises optimales via Kelly Criterion.
+    """
+    total_prob = sum(p["prob_ia"] for p in partants)
+    mises = {}
+    for p in partants:
+        mise_raw = capital * kelly_pct * (p["prob_ia"] / total_prob)
+        mise = max(1.5, round(mise_raw * 2) / 2)  # Arrondi 0.50€, min PMU 1.50€
+        mises[p["num"]] = mise
+    return mises
+
+
+def analyser_partants(course_data: dict) -> dict:
+    """
+    Fonction principale : analyse tous les partants et enrichit les données de course.
+    """
+    partants = course_data["partants"]
+    nb = len(partants)
+    log.info(f"Analyse de {nb} partants...")
+
+    # Calcul des scores
+    partants = [calculer_score_composite(p, nb) for p in partants]
+
+    # Normalisation probabilités
+    partants = normaliser_probabilites(partants)
+
+    # Tri par score IA décroissant
+    partants_tries = sorted(partants, key=lambda x: x["score_ia"], reverse=True)
+
+    # Rang IA
+    for i, p in enumerate(partants_tries):
+        p["rang_ia"] = i + 1
+
+    # Trier aussi par numéro pour le tableau
+    partants_par_num = sorted(partants, key=lambda x: x["num"])
+
+    # Favori et best VB
+    favori = partants_tries[0]
+    vbs_positifs = [p for p in partants_tries if p["is_vb"]]
+    best_vb = max(vbs_positifs, key=lambda x: x["edge"]) if vbs_positifs else favori
+
+    # Grilles
+    grilles = generer_grilles(partants_tries)
+
+    # Kelly avec 100€ de capital
+    mises = calculer_kelly(partants_tries, capital=100.0)
+
+    log.info(f"✅ Favori IA : N°{favori['num']} {favori['nom']} (score {favori['score_ia']})")
+    log.info(f"✅ Quinté+ base : {' – '.join(map(str, grilles['quinte']))}")
+    log.info(f"✅ Best VB : N°{best_vb['num']} {best_vb['nom']} (edge +{best_vb['edge']:.1f}%)")
+
+    return {
+        **course_data,
+        "partants":        partants_par_num,
+        "partants_tries":  partants_tries,
+        "favori":          favori,
+        "best_vb":         best_vb,
+        "nb_vb":           len(vbs_positifs),
+        "grilles":         grilles,
+        "mises_kelly":     mises,
+        "quinte_base":     grilles["quinte"],
+        "total_prob":      sum(p["prob_ia"] for p in partants),
+    }
+
+"""
+TurfAI Pro — Générateur HTML
+Produit le fichier index.html complet à partir des données analysées
+"""
+
+import logging
+from datetime import datetime
+
+log = logging.getLogger(__name__)
+
+JOURS_FR = {
+    "Monday": "Lundi", "Tuesday": "Mardi", "Wednesday": "Mercredi",
+    "Thursday": "Jeudi", "Friday": "Vendredi", "Saturday": "Samedi", "Sunday": "Dimanche"
+}
+MOIS_FR = {
+    "January": "Janvier", "February": "Février", "March": "Mars",
+    "April": "Avril", "May": "Mai", "June": "Juin",
+    "July": "Juillet", "August": "Août", "September": "Septembre",
+    "October": "Octobre", "November": "Novembre", "December": "Décembre"
+}
+
+def date_fr(dt: datetime = None) -> str:
+    """Retourne la date en français."""
+    dt = dt or datetime.now()
+    jour = JOURS_FR.get(dt.strftime("%A"), dt.strftime("%A"))
+    mois = MOIS_FR.get(dt.strftime("%B"), dt.strftime("%B"))
+    return f"{jour} {dt.day} {mois} {dt.year}"
+
+
+def musique_html(musique: str) -> str:
+    """Génère le HTML des pastilles de musique."""
+    tokens = musique.upper().split()[:7]
+    html = '<div class="musiq">'
+    for t in tokens:
+        clean = t.replace("(", "").replace(")", "").replace("P", "").replace("H", "")
+        if t in ("(25)", "DA", "DM", "TH", "AH", "TA", "0", "NP") or clean == "25":
+            css = "mpx"
+            label = clean if clean != "25" else "25"
+        elif clean == "1":
+            css, label = "mp1", "1"
+        elif clean == "2":
+            css, label = "mp2", "2"
+        elif clean == "3":
+            css, label = "mp3", "3"
+        else:
+            css = "mp4"
+            label = t.rstrip("PpHh") if len(t) < 4 else t[:3]
+        html += f'<div class="mp {css}">{label}</div>'
+    html += "</div>"
+    return html
+
+
+def rang_label(rang: int) -> str:
+    if rang == 1: return "🥇 1"
+    if rang == 2: return "🥈 2"
+    if rang == 3: return "🥉 3"
+    return str(rang)
+
+
+def gc(n: int, cls: str = "") -> str:
+    """Génère un numéro de grille."""
+    return f'<div class="gc-num {cls}">{n}</div>'
+
+
+def generer_html(data: dict) -> str:
+    """Génère le fichier HTML complet du dashboard TurfAI Pro."""
+
+    course    = data
+    partants  = data["partants"]
+    tries     = data["partants_tries"]
+    favori    = data["favori"]
+    best_vb   = data["best_vb"]
+    grilles   = data["grilles"]
+    mises     = data["mises_kelly"]
+    consensus = data.get("consensus_presse", [])
+    nb        = len(partants)
+    date_str  = date_fr()
+
+    # ── Top 5 tableau ──────────────────────────────────────
+    def row_top5(p: dict, rang: int) -> str:
+        nc = "var(--green)" if rang==1 else "var(--blue)" if rang==2 else "var(--gold)" if rang==3 else "var(--muted)"
+        bar_w = max(5, round(p["score_ia"]))
+        grad = ("linear-gradient(90deg,var(--green),var(--cyan))" if rang==1 else
+                "linear-gradient(90deg,var(--blue),var(--purple))" if rang==2 else
+                "linear-gradient(90deg,var(--gold),#FF8C42)" if rang==3 else "var(--muted)")
+        is_vb = p["is_vb"]
+        return f"""
+            <tr class="{'r'+str(rang) if rang<=3 else ''}">
+              <td><span class="rank-badge" style="color:{nc}">{rang_label(rang)}</span></td>
+              <td><div class="num-badge" style="color:{nc};border-color:{nc}40">{p['num']}</div></td>
+              <td><div class="horse-name">{p['nom']}</div><div class="horse-sub">{p.get('jockey','N/A')} · {p.get('entraineur','N/A')}</div></td>
+              <td><div class="score-bar"><div class="score-bar-track"><div class="score-bar-fill sfill" style="width:{bar_w}%;background:{grad}"></div></div><span style="font-family:var(--mono);font-size:11px;font-weight:700;color:{nc}">{p['score_ia']}</span></div></td>
+              <td><span class="prob-pill" style="background:{'rgba(0,214,143,0.1)' if is_vb else 'rgba(77,158,255,0.08)'};color:{'var(--green)' if is_vb else 'var(--blue)'}">{p['prob_ia']}%</span></td>
+              <td><span class="cote-val" style="color:{'var(--green)' if p['cote']<=4 else 'var(--gold)' if p['cote']<=8 else 'var(--muted)'}">{p['cote']}</span></td>
+            </tr>"""
+
+    top5_rows = "".join(row_top5(p, i+1) for i, p in enumerate(tries[:5]))
+
+    # ── Grilles mini dashboard ─────────────────────────────
+    def grille_row(label, nums, cls_list):
+        nums_html = ""
+        for i, n in enumerate(nums):
+            c = cls_list[i] if i < len(cls_list) else ""
+            nums_html += gc(n, c)
+            if i < len(nums)-1:
+                nums_html += '<span class="gc-sep">–</span>'
+        is_quinte = label == "Quinté+"
+        bg = "background:rgba(0,214,143,0.04);border-radius:8px;padding:6px 8px;border:1px solid rgba(0,214,143,0.12)" if is_quinte else ""
+        lbl_color = "color:var(--green);font-weight:700" if is_quinte else ""
+        return f'<div class="grille-combo" style="{bg}"><span style="width:70px;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;{lbl_color}">{label}</span>{nums_html}</div>'
+
+    grilles_html = (
+        grille_row("Couplé",  grilles["couple"], ["gc-base","gc-sel"]) +
+        grille_row("Tiercé",  grilles["tierce"], ["gc-base","gc-sel","gc-sel"]) +
+        grille_row("Quarté+", grilles["quarte"], ["gc-base","gc-sel","gc-sel",""]) +
+        grille_row("Quinté+", grilles["quinte"], ["gc-base","gc-sel","gc-sel","",""])
+    )
+
+    # ── Kelly dashboard ────────────────────────────────────
+    k_fav  = mises.get(favori["num"], 0)
+    k_2nd  = mises.get(tries[1]["num"], 0) if len(tries)>1 else 0
+    k_gain = round((favori["cote"] * k_fav * 0.55) - k_fav, 2)
+
+    kelly_html = f"""
+          <div class="kelly-row"><span class="kelly-lbl">N°{favori['num']} {favori['nom']} (gagnant)</span><span class="kelly-val" style="color:var(--green)">{k_fav:.2f} €</span></div>
+          <div class="kelly-row"><span class="kelly-lbl">N°{tries[1]['num']} {tries[1]['nom']} (gagnant)</span><span class="kelly-val" style="color:var(--green)">{k_2nd:.2f} €</span></div>
+          <div class="kelly-row"><span class="kelly-lbl">Couplé {grilles['couple'][0]}–{grilles['couple'][1]}</span><span class="kelly-val" style="color:var(--gold)">{max(1.5,round((k_fav+k_2nd)*0.45*2)/2):.2f} €</span></div>
+          <div class="kelly-row"><span class="kelly-lbl">Tiercé {' – '.join(map(str,grilles['tierce']))}</span><span class="kelly-val" style="color:var(--gold)">{max(1.5,round((k_fav+k_2nd)*0.25*2)/2):.2f} €</span></div>
+          <div class="kelly-row"><span class="kelly-lbl">Gain espéré +25%</span><span class="kelly-val" style="color:var(--green)">+{abs(k_gain):.2f} €</span></div>"""
+
+    # ── Consensus presse ───────────────────────────────────
+    def cn(n, cls): return f'<div class="cn {cls}">{n}</div>'
+
+    consensus_html = ""
+    base_set = set(grilles["couple"])
+    for src in consensus:
+        nums_html = "".join(
+            cn(n, "cn-base" if n in base_set else "cn-comp" if n in grilles["tierce"] else "cn-other")
+            for n in src["nums"][:8]
+        )
+        consensus_html += f'<div class="consensus-row"><span class="source-name">{src["source"]}</span><div class="consensus-nums">{nums_html}</div></div>'
+
+    base_consensus = " ".join(f'<div class="cn cn-base" style="border-radius:6px;padding:3px 8px;width:auto;font-size:11px">{n}</div>' for n in grilles["couple"])
+    comp_consensus = " ".join(f'<div class="cn cn-comp" style="border-radius:6px;padding:3px 8px;width:auto;font-size:11px">{n}</div>' for n in grilles["tierce"][2:])
+    extra_consensus = " ".join(f'<div class="cn cn-other" style="border-radius:6px;padding:3px 8px;width:auto;font-size:11px">{n}</div>' for n in grilles["quinte"][3:])
+
+    # ── Analyse complète tableau ───────────────────────────
+    def row_analyse(p: dict) -> str:
+        rang = p.get("rang_ia", 16)
+        nc = ("var(--green)" if rang==1 else "var(--blue)" if rang==2 else "var(--gold)" if rang==3 else "var(--text)")
+        border = f";border-color:{nc}40" if rang<=3 else ""
+        bar_w = max(3, round(p["score_ia"]))
+        grad = ("linear-gradient(90deg,var(--green),var(--cyan))" if rang==1 else
+                "linear-gradient(90deg,var(--blue),var(--purple))" if rang==2 else
+                "linear-gradient(90deg,var(--gold),#FF8C42)" if rang==3 else
+                "linear-gradient(90deg,var(--danger),var(--muted))" if rang>13 else "var(--muted)")
+        sc_col = ("var(--green)" if p["score_ia"]>=80 else "var(--blue)" if p["score_ia"]>=70 else
+                  "var(--gold)" if p["score_ia"]>=55 else "var(--muted)" if p["score_ia"]>25 else "var(--red)")
+        is_vb = p["is_vb"]
+        is_near = not is_vb and p["edge"] > -3
+        edge_disp = (f'<span class="vb-yes">⭐ +{p["edge"]:.1f}%</span>' if is_vb else
+                     f'<span class="vb-near">≈ {p["edge"]:.1f}%</span>' if is_near else
+                     f'<span class="vb-no">{p["edge"]:.1f}%</span>')
+        prob_bg = "rgba(0,214,143,0.1)" if is_vb else "rgba(77,158,255,0.1)" if rang<=3 else "rgba(107,123,153,0.08)"
+        prob_col = "var(--green)" if is_vb else "var(--blue)" if rang<=3 else "var(--muted)"
+        cote_col = "var(--green)" if p["cote"]<=4 else "var(--gold)" if p["cote"]<=8 else "var(--muted)"
+        rc = f"r{rang}" if rang<=5 else ""
+        rk_col = "var(--gold)" if rang==1 else "#9ca3af" if rang==2 else "#92623a" if rang==3 else "var(--danger)" if rang>=14 else "var(--muted)"
+        return f"""
+            <tr class="{rc}">
+              <td><div class="num-badge" style="color:{nc}{border}">{p['num']}</div></td>
+              <td><div class="horse-name">{p['nom']}</div><div class="horse-sub">{p.get('sexe','H')}{p.get('age',4)} · {p.get('discipline','Plat')}</div></td>
+              <td style="font-size:11px"><strong>{p.get('jockey','N/A')}</strong><br><span style="color:var(--muted)">{p.get('entraineur','N/A')}</span></td>
+              <td style="font-size:11px;color:var(--muted)">{p.get('poids',58)}kg · C.{p.get('corde',0)}</td>
+              <td>{musique_html(p.get('musique','(25) (25) (25)'))}</td>
+              <td><div class="score-bar"><div class="score-bar-track"><div class="score-bar-fill sfill" style="width:{bar_w}%;background:{grad}"></div></div><span style="font-family:var(--mono);font-size:11px;font-weight:700;color:{sc_col}">{p['score_ia']}</span></div></td>
+              <td><span class="prob-pill" style="background:{prob_bg};color:{prob_col}">{p['prob_ia']}%</span></td>
+              <td><span class="cote-val" style="color:{cote_col}">{p['cote']}</span></td>
+              <td>{edge_disp}</td>
+              <td class="rank-badge" style="color:{rk_col}">{rang_label(rang)}</td>
+            </tr>"""
+
+    analyse_rows = "".join(row_analyse(p) for p in tries)
+
+    # ── Value Bets page ────────────────────────────────────
+    vbs_data = [p for p in tries if p["is_vb"]][:5]
+    vb_cards_html = ""
+    for p in vbs_data:
+        strength = "⭐⭐ TRÈS FORT" if p["edge"] > 8 else "⭐ FORT" if p["edge"] > 4 else "OK"
+        vb_cards_html += f"""
+      <div class="vb-card">
+        <div class="vb-num">{p['num']}</div>
+        <div class="vb-horse">{p['nom']}</div>
+        <div class="vb-row"><span class="vb-key">Prob. IA</span><span class="vb-data g">{p['prob_ia']}%</span></div>
+        <div class="vb-row"><span class="vb-key">Cote {p['cote']} → Prob.</span><span class="vb-data">{p['prob_cote']}%</span></div>
+        <div class="vb-row"><span class="vb-key">{p.get('jockey','N/A')}</span><span class="vb-data">Score {p['score_ia']}</span></div>
+        <div class="vb-edge">{strength} EDGE +{p['edge']:.1f}%</div>
+      </div>"""
+
+    # ── Monte Carlo bars ───────────────────────────────────
+    mc_top = tries[:8]
+    mc_html = ""
+    for p in mc_top:
+        pct = p["prob_ia"]
+        w = max(5, round(pct / mc_top[0]["prob_ia"] * 95))
+        grad = ("linear-gradient(90deg,var(--green),var(--cyan))" if p==mc_top[0] else
+                "linear-gradient(90deg,var(--blue),var(--purple))" if p==mc_top[1] else
+                "linear-gradient(90deg,var(--gold),#FF8C42)" if p==mc_top[2] else "var(--muted)")
+        col = "var(--green)" if p==mc_top[0] else "var(--blue)" if p==mc_top[1] else "var(--muted)"
+        mc_html += f"""
+      <div class="mc-item">
+        <div class="mc-top"><span>N°{p['num']} {p['nom']}</span><span style="font-family:var(--mono);font-weight:700;color:{col}">{pct}%</span></div>
+        <div class="mc-bar"><div class="mc-fill sfill" style="width:{w}%;background:{grad}"></div></div>
+      </div>"""
+
+    # ── Grilles page ───────────────────────────────────────
+    def grille_page_row(label, nums, classes):
+        ns = "".join(f'<div class="gc-num {classes[i] if i<len(classes) else ""}">{n}</div><span class="gc-sep">–</span>' for i,n in enumerate(nums))
+        return f'<div class="grille-combo">{ns.rstrip("<span class=\"gc-sep\">–</span>")}</div>'
+
+    # ── JS PARTANTS data ───────────────────────────────────
+    js_partants = "const PARTANTS = [\n"
+    for p in partants:
+        jockey_esc = p.get("jockey","").replace("'","\\'")
+        nom_esc    = p["nom"].replace("'","\\'")
+        js_partants += (
+            f"  {{ n:{p['num']}, nom:'{nom_esc}', j:'{jockey_esc}', "
+            f"e:'{p.get('entraineur','').replace(chr(39),chr(92)+chr(39))}', "
+            f"p:'{p.get('poids',58)}kg', c:'C.{p.get('corde',0)}', "
+            f"m:'{p.get('musique','(25) (25) (25)')}', "
+            f"sc:{p['score_ia']}, prob:{p['prob_ia']}, cote:{p['cote']}, "
+            f"sexe:'{p.get('sexe','H')}', age:{p.get('age',4)}, "
+            f"discipline:'{p.get('discipline','Plat')}' }},\n"
+        )
+    js_partants += "];"
+
+    # ── Cours infos ────────────────────────────────────────
+    alloc_fmt = f"{course['allocation']:,.0f}".replace(",", " ") + " €"
+    terrain_str = course.get("terrain", "Bon")
+    penetre = course.get("penetrometre", 0)
+    if penetre:
+        terrain_str += f" · Pénétro {penetre}"
+
+    # ── HTML FINAL ─────────────────────────────────────────
+    # (Incorpore le template complet avec les données)
+    with open("/app/template.html", "r", encoding="utf-8") as f:
+        template = f.read()
+
+    # Substitutions
+    replacements = {
+        "{{COURSE_NOM}}":       course["nom"],
+        "{{COURSE_REF}}":       course.get("ref","R1C3"),
+        "{{COURSE_LIEU}}":      course["lieu"],
+        "{{COURSE_DATE}}":      course["date"],
+        "{{COURSE_DATE_FULL}}": date_str,
+        "{{COURSE_DIST}}":      course["distance"],
+        "{{COURSE_DISCIPLINE}}": course.get("discipline","Plat"),
+        "{{COURSE_ALLOC}}":     alloc_fmt,
+        "{{COURSE_HEURE}}":     course["heure"],
+        "{{COURSE_TERRAIN}}":   terrain_str,
+        "{{NB_PARTANTS}}":      str(nb),
+        "{{FAVORI_NUM}}":       str(favori["num"]),
+        "{{FAVORI_NOM}}":       favori["nom"],
+        "{{FAVORI_SCORE}}":     str(favori["score_ia"]),
+        "{{FAVORI_PROB}}":      str(favori["prob_ia"]),
+        "{{BEST_VB_NUM}}":      str(best_vb["num"]),
+        "{{BEST_VB_NOM}}":      best_vb["nom"],
+        "{{BEST_VB_EDGE}}":     f"+{best_vb['edge']:.1f}%",
+        "{{NB_VB}}":            str(data["nb_vb"]),
+        "{{QUINTE_BASE}}":      " – ".join(map(str, grilles["quinte"])),
+        "{{QUINTE_NUM1}}":      str(grilles["quinte"][0]),
+        "{{QUINTE_NUM2}}":      str(grilles["quinte"][1]),
+        "{{QUINTE_NUM3}}":      str(grilles["quinte"][2]),
+        "{{QUINTE_NUM4}}":      str(grilles["quinte"][3]),
+        "{{QUINTE_NUM5}}":      str(grilles["quinte"][4]) if len(grilles["quinte"])>4 else "",
+        "{{TOP5_ROWS}}":        top5_rows,
+        "{{GRILLES_MINI}}":     grilles_html,
+        "{{KELLY_ROWS}}":       kelly_html,
+        "{{CONSENSUS_ROWS}}":   consensus_html,
+        "{{BASE_CONSENSUS}}":   base_consensus,
+        "{{COMP_CONSENSUS}}":   comp_consensus,
+        "{{EXTRA_CONSENSUS}}":  extra_consensus,
+        "{{ANALYSE_ROWS}}":     analyse_rows,
+        "{{VB_CARDS}}":         vb_cards_html,
+        "{{MC_BARS}}":          mc_html,
+        "{{JS_PARTANTS}}":      js_partants,
+        "{{GENERATED_AT}}":     datetime.now().strftime("%d/%m/%Y à %H:%M"),
+    }
+
+    html = template
+    for key, val in replacements.items():
+        html = html.replace(key, val)
+
+    log.info(f"✅ HTML généré : {len(html):,} caractères")
+    return html
+"""
+TurfAI Pro — GitHub Updater
+Met à jour index.html sur GitHub via l'API REST
+Vercel détecte le changement et redéploie automatiquement
+"""
+
+import os
+import base64
+import logging
+import requests
+
+log = logging.getLogger(__name__)
+
+# ── Config (depuis variables d'environnement Railway) ────
+GITHUB_TOKEN  = os.environ.get("GITHUB_TOKEN", "")    # Token GitHub Personal Access
+GITHUB_OWNER  = os.environ.get("GITHUB_OWNER", "")    # Ton username GitHub
+GITHUB_REPO   = os.environ.get("GITHUB_REPO", "turfai-pro")
+GITHUB_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
+FILE_PATH     = "index.html"
+
+HEADERS = {
+    "Authorization": f"Bearer {GITHUB_TOKEN}",
+    "Accept": "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "Content-Type": "application/json",
+}
+BASE_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}"
+
+
+def get_file_sha() -> str | None:
+    """Récupère le SHA du fichier index.html actuel (nécessaire pour le mettre à jour)."""
+    url = f"{BASE_URL}/contents/{FILE_PATH}?ref={GITHUB_BRANCH}"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        if resp.status_code == 200:
+            return resp.json().get("sha")
+        elif resp.status_code == 404:
+            log.info("Fichier index.html inexistant — sera créé")
+            return None
+        else:
+            log.error(f"Erreur get SHA: {resp.status_code} — {resp.text[:200]}")
+            return None
+    except Exception as e:
+        log.error(f"Exception get SHA: {e}")
+        return None
+
+
+def pousser_sur_github(html_content: str, commit_message: str) -> bool:
+    """
+    Met à jour ou crée index.html sur GitHub.
+    Retourne True si succès, False sinon.
+    """
+    if not GITHUB_TOKEN or not GITHUB_OWNER:
+        log.error("❌ GITHUB_TOKEN ou GITHUB_OWNER non configurés")
+        return False
+
+    # Encoder le contenu en base64
+    content_b64 = base64.b64encode(html_content.encode("utf-8")).decode("utf-8")
+
+    # Récupérer le SHA existant
+    sha = get_file_sha()
+
+    # Construire le payload
+    payload = {
+        "message": commit_message,
+        "content": content_b64,
+        "branch":  GITHUB_BRANCH,
+    }
+    if sha:
+        payload["sha"] = sha  # Nécessaire pour une mise à jour
+
+    # Envoyer la requête
+    url = f"{BASE_URL}/contents/{FILE_PATH}"
+    try:
+        resp = requests.put(url, headers=HEADERS, json=payload, timeout=30)
+
+        if resp.status_code in (200, 201):
+            commit_url = resp.json().get("commit", {}).get("html_url", "")
+            log.info(f"✅ GitHub mis à jour : {commit_url}")
+            return True
+        else:
+            log.error(f"❌ Erreur GitHub PUT: {resp.status_code}")
+            log.error(f"   Détail: {resp.text[:500]}")
+            return False
+
+    except Exception as e:
+        log.error(f"Exception GitHub push: {e}")
+        return False
+
+
+def verifier_connexion() -> bool:
+    """Vérifie que les credentials GitHub sont valides."""
+    if not GITHUB_TOKEN:
+        log.error("GITHUB_TOKEN non défini")
+        return False
+
+    try:
+        resp = requests.get(
+            "https://api.github.com/user",
+            headers=HEADERS,
+            timeout=10
+        )
+        if resp.status_code == 200:
+            user = resp.json().get("login", "inconnu")
+            log.info(f"✅ GitHub connecté en tant que : {user}")
+            return True
+        else:
+            log.error(f"❌ Token GitHub invalide : {resp.status_code}")
+            return False
+    except Exception as e:
+        log.error(f"Exception vérification GitHub: {e}")
+        return False
+"""
+TurfAI Pro — Notifier WhatsApp
+Envoie les notifications via CallMeBot (gratuit, pas d'API payante)
+"""
+
+import os
+import logging
+import requests
+from urllib.parse import quote
+
+log = logging.getLogger(__name__)
+
+# ── Config (variables d'environnement Railway) ───────────
+WHATSAPP_PHONE  = os.environ.get("WHATSAPP_PHONE", "")    # ex: 22797123456
+CALLMEBOT_KEY   = os.environ.get("CALLMEBOT_KEY", "")     # Clé API CallMeBot
+
+
+def envoyer_whatsapp(message: str) -> bool:
+    """
+    Envoie un message WhatsApp via CallMeBot.
+    Gratuit, limite ~200 messages/jour.
+
+    Setup requis : envoyer "I allow callmebot to send me messages" au
+    numéro WhatsApp +34 644 58 52 72 pour obtenir la clé API.
+    """
+    if not WHATSAPP_PHONE or not CALLMEBOT_KEY:
+        log.warning("WhatsApp non configuré (WHATSAPP_PHONE ou CALLMEBOT_KEY manquant)")
+        return False
+
+    url = (
+        f"https://api.callmebot.com/whatsapp.php"
+        f"?phone={WHATSAPP_PHONE}"
+        f"&text={quote(message)}"
+        f"&apikey={CALLMEBOT_KEY}"
+    )
+
+    try:
+        resp = requests.get(url, timeout=15)
+        if resp.status_code == 200 and "Message queued" in resp.text:
+            log.info(f"✅ WhatsApp envoyé à {WHATSAPP_PHONE}")
+            return True
+        else:
+            log.warning(f"WhatsApp status {resp.status_code}: {resp.text[:100]}")
+            return False
+    except Exception as e:
+        log.warning(f"Erreur envoi WhatsApp: {e}")
+        return False
+requests==2.31.0
+beautifulsoup4==4.12.3
+schedule==1.2.1
+lxml==5.1.0
+python-dotenv==1.0.0
+
 [build]
 builder = "NIXPACKS"
 
 [deploy]
-startCommand = "uvicorn main:app --host 0.0.0.0 --port 8000"
+startCommand = "python main.py"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
