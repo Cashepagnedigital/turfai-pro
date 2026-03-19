@@ -16,7 +16,7 @@ body {
     margin: 0;
 }
 
-h1 { color: #22c55e; margin-top: 20px; }
+h1 { color: #22c55e; }
 
 .container { max-width: 500px; margin: auto; }
 
@@ -25,7 +25,6 @@ h1 { color: #22c55e; margin-top: 20px; }
     padding: 20px;
     margin: 15px;
     border-radius: 15px;
-    box-shadow: 0 0 20px rgba(0,255,100,0.1);
 }
 
 button {
@@ -43,14 +42,6 @@ button {
     color: black;
 }
 
-input {
-    padding: 12px;
-    width: 80%;
-    border-radius: 8px;
-    border: none;
-    margin: 10px;
-}
-
 .highlight {
     color: #4ade80;
     font-weight: bold;
@@ -61,154 +52,132 @@ input {
 <body>
 
 <h1>🏇 TurfAI Pro</h1>
-<p>🔥 Gagne au Quinté+ avec l'Intelligence Artificielle</p>
+<p>🔥 Gagne au Quinté+ avec l'IA</p>
 
 <div class="container">
 
+<!-- GRATUIT -->
 <div class="card">
-    <h2>📊 Prédictions du Jour</h2>
-    <button onclick="loadPrediction()">Voir les chevaux gagnants</button>
-    <p id="prediction">Clique pour voir...</p>
+    <h2>🎁 Pronostic Gratuit</h2>
+    <button onclick="loadFree()">Voir</button>
+    <p id="free"></p>
 </div>
 
+<!-- HISTORIQUE -->
 <div class="card">
-    <h2>💳 Devenir VIP</h2>
-    <p class="highlight">Accès complet + pronostics premium</p>
-
-    <button class="pay-btn" onclick="payer()">🔥 Devenir VIP maintenant</button>
-
-    <p style="font-size: 12px;">Paiement sécurisé Mobile Money</p>
+    <h2>📜 Historique Quinté+</h2>
+    <p>🏇 3 - 12 - 7 - 1 - 9</p>
+    <p>🏇 5 - 8 - 2 - 11 - 4</p>
+    <p>🏇 9 - 1 - 6 - 14 - 3</p>
 </div>
 
+<!-- VIP -->
+<div class="card">
+    <h2>💎 Abonnement VIP</h2>
+    <p class="highlight">Accès complet aux pronostics</p>
+    <p>💰 Prix unique : <b>6500 CFA</b></p>
+
+    <button class="pay-btn" onclick="payer()">🔥 S'abonner maintenant</button>
+</div>
+
+<!-- ACCES VIP -->
 <div class="card">
     <h2>🔐 Accès VIP</h2>
-    <input type="text" id="userKeyInput" placeholder="Entrer votre clé VIP">
-    <button onclick="checkPremium()">Accéder</button>
-    <p id="premiumResult"></p>
+    <button onclick="checkVIP()">Accéder</button>
+    <p id="vip"></p>
 </div>
 
+<!-- PARRAINAGE -->
 <div class="card">
-    <h2>💰 Parrainage</h2>
+    <h2>👥 Parrainage</h2>
+    <p class="highlight">Invite et gagne des bonus</p>
 
-    <p class="highlight">Invite tes amis et gagne des jours VIP GRATUITS 🔥</p>
-
-    <p><b>Ton lien :</b></p>
-    <p id="aff-link"></p>
+    <p id="refLink"></p>
 
     <button onclick="copyLink()">📋 Copier</button>
-    <button onclick="shareWhatsApp()">📲 WhatsApp</button>
-
-    <hr>
-
-    <p>👥 Filleuls : <span id="aff-filleuls">0</span></p>
-    <p>💰 Gains : <span id="aff-gains">0 FCFA</span></p>
+    <button onclick="share()">📲 WhatsApp</button>
 </div>
 
 </div>
 
 <script>
-// CONFIG
-const API_URL = "https://turfai-production.up.railway.app";
-const PAYMENT_URL = "https://uazgnjsa.mychariow.shop/prd_l1336b";
+const API = "https://turfai-production.up.railway.app";
+const PAY = "https://uazgnjsa.mychariow.shop/prd_l1336b";
 
-// USER KEY
-let userKey = localStorage.getItem("user_key");
-if (!userKey) {
-    userKey = "user_" + Math.random().toString(36).substring(2, 10);
-    localStorage.setItem("user_key", userKey);
+// USER UNIQUE
+let user = localStorage.getItem("user");
+if (!user) {
+    user = "user_" + Math.random().toString(36).substring(2, 10);
+    localStorage.setItem("user", user);
 }
 
-// LIEN PARRAINAGE
-const AFF_DATA = {
-    link: `${window.location.origin}?ref=${userKey}`
-};
-
-// RECUP CODE PARRAIN
+// REF
 const params = new URLSearchParams(window.location.search);
 const ref = params.get("ref");
-if (ref) localStorage.setItem("ref_code", ref);
+if (ref) localStorage.setItem("ref", ref);
 
-// PAIEMENT
+// LIEN PARRAINAGE
+const refLink = `${window.location.origin}?ref=${user}`;
+document.getElementById("refLink").innerText = refLink;
+
+// GRATUIT
+async function loadFree() {
+    try {
+        const res = await fetch(API + "/quinte");
+        const data = await res.json();
+
+        document.getElementById("free").innerText =
+            "🏇 " + data.prediction.slice(0,3).join(" - ");
+    } catch {
+        document.getElementById("free").innerText = "Erreur";
+    }
+}
+
+// VIP
+async function checkVIP() {
+    try {
+        const res = await fetch(API + "/premium?key=" + user);
+        const data = await res.json();
+
+        if (data.access) {
+            const res2 = await fetch(API + "/quinte");
+            const d2 = await res2.json();
+
+            document.getElementById("vip").innerText =
+                "🏇 " + d2.prediction.join(" - ");
+        } else {
+            document.getElementById("vip").innerText = "❌ Non VIP";
+        }
+    } catch {
+        document.getElementById("vip").innerText = "Erreur";
+    }
+}
+
+// 💳 PAIEMENT INTÉGRÉ (IMPORTANT)
 function payer() {
-    const ref_code = localStorage.getItem("ref_code") || "";
+    const ref_code = localStorage.getItem("ref") || "";
 
-    // Ajout du parrain au lien
-    const url = PAYMENT_URL + "?ref=" + ref_code;
+    const url = PAY + "?user_id=" + user + "&ref=" + ref_code;
 
     window.location.href = url;
 }
 
-// STATS
-async function loadStats() {
-    try {
-        const res = await fetch(`${API_URL}/user-stats?key=${userKey}`);
-        const data = await res.json();
-
-        document.getElementById("aff-filleuls").innerText = data.referrals || 0;
-        document.getElementById("aff-gains").innerText = (data.gains || 0) + " FCFA";
-    } catch {}
-}
-
-// PREDICTION
-async function loadPrediction() {
-    document.getElementById("prediction").innerText = "Chargement...";
-    try {
-        const res = await fetch(`${API_URL}/quinte`);
-        const data = await res.json();
-
-        document.getElementById("prediction").innerText =
-            "🏇 " + data.prediction.join(" - ");
-    } catch {
-        document.getElementById("prediction").innerText = "Erreur serveur";
-    }
-}
-
-// PREMIUM
-async function checkPremium() {
-    const key = document.getElementById("userKeyInput").value;
-
-    document.getElementById("premiumResult").innerText = "Vérification...";
-
-    try {
-        const res = await fetch(`${API_URL}/premium?key=${key}`);
-        const data = await res.json();
-
-        if (data.error) {
-            document.getElementById("premiumResult").innerText = "❌ " + data.error;
-        } else {
-            document.getElementById("premiumResult").innerText =
-                "✅ " + data.prediction.join(" - ");
-        }
-    } catch {
-        document.getElementById("premiumResult").innerText = "Erreur serveur";
-    }
-}
-
-// WHATSAPP
-function shareWhatsApp() {
-    const message = `🏇 TurfAI Pro IA 🔥
-
-Gagne au Quinté+ facilement
-
-🎁 Accès ici :
-${AFF_DATA.link}
-
-💰 Invite et gagne des bonus !`;
-
-    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`);
-}
-
 // COPY
 function copyLink() {
-    navigator.clipboard.writeText(AFF_DATA.link);
+    navigator.clipboard.writeText(refLink);
     alert("Lien copié !");
 }
 
-// INIT
-window.onload = () => {
-    document.getElementById("aff-link").innerText = AFF_DATA.link;
-    loadStats();
-};
+// SHARE
+function share() {
+    const msg = `🏇 TurfAI Pro
+
+Gagne au Quinté+
+
+${refLink}`;
+
+    window.open("https://wa.me/?text=" + encodeURIComponent(msg));
+}
 </script>
 
 </body>
