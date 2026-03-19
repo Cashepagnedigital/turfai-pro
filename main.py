@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timedelta
 import json
@@ -7,7 +7,14 @@ import random
 
 app = FastAPI()
 
-# CORS (autorise ton site)
+# ========================
+# 🔐 CLÉ ADMIN PRIVÉE
+# ========================
+ADMIN_KEY = "TURFAI-ADMIN-2026"
+
+# ========================
+# CORS
+# ========================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,53 +29,69 @@ DB_FILE = "database.json"
 # UTILS
 # ========================
 
-def load_json(file):
-    if not os.path.exists(file):
+def load_users():
+    if not os.path.exists(DB_FILE):
         return {}
-    with open(file, "r") as f:
+    with open(DB_FILE, "r") as f:
         return json.load(f)
 
-def save_json(file, data):
-    with open(file, "w") as f:
+def save_users(data):
+    with open(DB_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
 # ========================
-# PREDICTION FAKE (À remplacer plus tard)
+# PRONOSTIC
 # ========================
 
-@app.get("/quinte-pro")
-def quinte():
-    chevaux = list(range(1, 16))
+def generate_prediction():
+    chevaux = list(range(1, 21))
     random.shuffle(chevaux)
+    return chevaux
 
+# ========================
+# GRATUIT
+# ========================
+
+@app.get("/quinte")
+def quinte():
+    prediction = generate_prediction()
     return {
-        "top5": chevaux[:5],
-        "outsiders": chevaux[5:10],
-        "confidence": random.randint(70, 95)
+        "prediction": prediction
     }
 
 # ========================
-# PREMIUM CHECK
+# VIP + ADMIN
 # ========================
 
 @app.get("/premium")
 def premium(key: str):
-    users = load_json(DB_FILE)
+
+    # ✅ ACCÈS ADMIN TOTAL
+    if key == ADMIN_KEY:
+        return {
+            "access": True,
+            "admin": True
+        }
+
+    users = load_users()
 
     if key not in users:
         return {"access": False}
 
     expire = datetime.fromisoformat(users[key]["expires"])
 
-    return {"access": expire > datetime.now()}
+    if expire > datetime.now():
+        return {"access": True}
+    else:
+        return {"access": False}
 
 # ========================
-# USER STATS
+# STATS
 # ========================
 
 @app.get("/user-stats")
 def stats(key: str):
-    users = load_json(DB_FILE)
+    users = load_users()
 
     if key not in users:
         return {"referrals": 0}
@@ -78,7 +101,7 @@ def stats(key: str):
     }
 
 # ========================
-# WEBHOOK CHARIOW
+# PAIEMENT CHARIOW
 # ========================
 
 @app.post("/payment-success")
@@ -91,9 +114,10 @@ async def payment_success(request: Request):
     if not user_id:
         return {"error": "user_id manquant"}
 
-    users = load_json(DB_FILE)
+    users = load_users()
     now = datetime.now()
 
+    # Activation VIP 30 jours
     if user_id not in users:
         users[user_id] = {
             "expires": (now + timedelta(days=30)).isoformat(),
@@ -108,7 +132,7 @@ async def payment_success(request: Request):
     if ref and ref in users:
         users[ref]["referrals"] = users[ref].get("referrals", 0) + 1
 
-    save_json(DB_FILE, users)
+    save_users(users)
 
     return {"status": "OK"}
 
@@ -119,18 +143,3 @@ async def payment_success(request: Request):
 @app.get("/")
 def home():
     return {"status": "TurfAI Pro Backend OK"}
-    from fastapi import FastAPI
-import random
-
-app = FastAPI()
-
-@app.get("/")
-def home():
-    return {"status": "TurfAI Pro Backend OK"}
-
-# ✅ ROUTE MANQUANTE (LE PROBLÈME EST ICI)
-@app.get("/quinte")
-def quinte():
-    chevaux = list(range(1, 21))
-    random.shuffle(chevaux)
-    return {"prediction": chevaux[:5]}
