@@ -7,14 +7,8 @@ import random
 
 app = FastAPI()
 
-# ========================
-# 🔐 CLÉ ADMIN PRIVÉE
-# ========================
 ADMIN_KEY = "TURFAI-ADMIN-2026"
 
-# ========================
-# CORS
-# ========================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -24,122 +18,80 @@ app.add_middleware(
 )
 
 DB_FILE = "database.json"
+HISTORY_FILE = "history.json"
 
-# ========================
-# UTILS
-# ========================
-
-def load_users():
-    if not os.path.exists(DB_FILE):
-        return {}
-    with open(DB_FILE, "r") as f:
+def load_json(file, default):
+    if not os.path.exists(file):
+        return default
+    with open(file, "r") as f:
         return json.load(f)
 
-def save_users(data):
-    with open(DB_FILE, "w") as f:
+def save_json(file, data):
+    with open(file, "w") as f:
         json.dump(data, f, indent=4)
 
-# ========================
-# PRONOSTIC
-# ========================
-
-def generate_prediction():
+def generate():
     chevaux = list(range(1, 21))
     random.shuffle(chevaux)
     return chevaux
 
-# ========================
-# GRATUIT
-# ========================
-
 @app.get("/quinte")
 def quinte():
-    prediction = generate_prediction()
-    return {
-        "prediction": prediction
-    }
+    prediction = generate()
+    history = load_json(HISTORY_FILE, [])
+    today = datetime.now().strftime("%Y-%m-%d")
 
-# ========================
-# VIP + ADMIN
-# ========================
+    if not any(h["date"] == today for h in history):
+        history.insert(0, {
+            "date": today,
+            "prediction": prediction[:5]
+        })
+        save_json(HISTORY_FILE, history)
+
+    return {"prediction": prediction}
+
+@app.get("/history")
+def history():
+    return load_json(HISTORY_FILE, [])[:10]
 
 @app.get("/premium")
 def premium(key: str):
-
-    # ✅ ACCÈS ADMIN TOTAL
     if key == ADMIN_KEY:
-        return {
-            "access": True,
-            "admin": True
-        }
+        return {"access": True}
 
-    users = load_users()
+    users = load_json(DB_FILE, {})
 
     if key not in users:
         return {"access": False}
 
     expire = datetime.fromisoformat(users[key]["expires"])
-
-    if expire > datetime.now():
-        return {"access": True}
-    else:
-        return {"access": False}
-
-# ========================
-# STATS
-# ========================
-
-@app.get("/user-stats")
-def stats(key: str):
-    users = load_users()
-
-    if key not in users:
-        return {"referrals": 0}
-
-    return {
-        "referrals": users[key].get("referrals", 0)
-    }
-
-# ========================
-# PAIEMENT CHARIOW
-# ========================
+    return {"access": expire > datetime.now()}
 
 @app.post("/payment-success")
-async def payment_success(request: Request):
+async def payment(request: Request):
     data = await request.json()
 
-    user_id = data.get("user_id") or data.get("metadata", {}).get("user_id")
-    ref = data.get("ref") or data.get("metadata", {}).get("ref")
+    user = data.get("user_id")
+    ref = data.get("ref")
 
-    if not user_id:
-        return {"error": "user_id manquant"}
+    if not user:
+        return {"error": "no user"}
 
-    users = load_users()
+    users = load_json(DB_FILE, {})
     now = datetime.now()
 
-    # Activation VIP 30 jours
-    if user_id not in users:
-        users[user_id] = {
-            "expires": (now + timedelta(days=30)).isoformat(),
-            "referrals": 0
-        }
-    else:
-        users[user_id]["expires"] = (
-            datetime.fromisoformat(users[user_id]["expires"]) + timedelta(days=30)
-        ).isoformat()
+    users[user] = {
+        "expires": (now + timedelta(days=30)).isoformat(),
+        "referrals": users.get(user, {}).get("referrals", 0)
+    }
 
-    # Parrainage
     if ref and ref in users:
         users[ref]["referrals"] = users[ref].get("referrals", 0) + 1
 
-    save_users(users)
+    save_json(DB_FILE, users)
 
-    return {"status": "OK"}
-
-# ========================
-# ROOT
-# ========================
+    return {"ok": True}
 
 @app.get("/")
 def home():
-    return {"status": "TurfAI Pro Backend OK"}
+    return {"status": "OK"}
