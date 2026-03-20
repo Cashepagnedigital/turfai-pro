@@ -112,7 +112,7 @@ const refLink = `${window.location.origin}?ref=${user}`;
 document.getElementById("refLink").innerText = refLink;
 
 // ✅ PRONOSTIC
-async function loadFree() {
+ async function loadFree() {
     const el = document.getElementById("free");
     el.innerText = "Chargement...";
 
@@ -160,7 +160,7 @@ async function loadHistory() {
         });
 
     } catch {
-        container.innerHTML = "❌ Backend non connecté";
+        container.innerHTML = "❌ Backend non connecté"; 
     }
 }
 
