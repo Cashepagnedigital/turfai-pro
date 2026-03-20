@@ -109,26 +109,53 @@ if (ref) localStorage.setItem("ref", ref);
 const refLink = `${window.location.origin}?ref=${user}`;
 document.getElementById("refLink").innerText = refLink;
 
-// GRATUIT
+// =====================
+// ✅ PRONOSTIC CORRIGÉ
+// =====================
 async function loadFree() {
+    const el = document.getElementById("free");
+    el.innerText = "Chargement...";
+
     try {
         const res = await fetch(API + "/quinte");
+
+        if (!res.ok) throw new Error();
+
         const data = await res.json();
 
-        document.getElementById("free").innerText =
-            "🏇 " + data.prediction.slice(0,3).join(" - ");
+        if (!data.prediction || data.prediction.length === 0) {
+            el.innerText = "Aucune donnée";
+            return;
+        }
+
+        el.innerText = "🏇 " + data.prediction.slice(0,3).join(" - ");
+
     } catch {
-        document.getElementById("free").innerText = "Erreur";
+        el.innerText = "Erreur serveur";
     }
 }
 
-// HISTORIQUE
+// =====================
+// ✅ HISTORIQUE CORRIGÉ
+// =====================
 async function loadHistory() {
+    const container = document.getElementById("history");
+    container.innerHTML = "Chargement...";
+
     try {
         const res = await fetch(API + "/history");
+
+        if (!res.ok) throw new Error();
+
         const data = await res.json();
 
-        const container = document.getElementById("history");
+        if (!data || data.length === 0) {
+            container.innerHTML = `
+                <p>📅 Aujourd'hui → 🏇 Pronostic en cours...</p>
+            `;
+            return;
+        }
+
         container.innerHTML = "";
 
         data.forEach(item => {
@@ -142,7 +169,7 @@ async function loadHistory() {
         });
 
     } catch {
-        document.getElementById("history").innerText = "Erreur";
+        container.innerHTML = "Erreur chargement";
     }
 }
 
@@ -177,7 +204,7 @@ function payer() {
 // COPY
 function copyLink() {
     navigator.clipboard.writeText(refLink);
-    alert("Copié !");
+    alert("Lien copié !");
 }
 
 // SHARE
@@ -189,6 +216,7 @@ function share() {
 // INIT
 window.onload = () => {
     loadHistory();
+    loadFree(); // 🔥 IMPORTANT
 };
 </script>
 
