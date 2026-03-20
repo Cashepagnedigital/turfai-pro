@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+ <!DOCTYPE html>
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
@@ -91,7 +91,9 @@ button {
 </div>
 
 <script>
-const API = "https://turfai-production-788a.up.railway.app";
+
+// ✅ TON BACKEND CORRECT
+const API = "https://turfai-pro-production-788a.up.railway.app";
 const PAY = "https://uazgnjsa.mychariow.shop/prd_l1336b";
 
 // USER
@@ -109,9 +111,7 @@ if (ref) localStorage.setItem("ref", ref);
 const refLink = `${window.location.origin}?ref=${user}`;
 document.getElementById("refLink").innerText = refLink;
 
-// =====================
-// ✅ PRONOSTIC CORRIGÉ
-// =====================
+// ✅ PRONOSTIC
 async function loadFree() {
     const el = document.getElementById("free");
     el.innerText = "Chargement...";
@@ -123,21 +123,14 @@ async function loadFree() {
 
         const data = await res.json();
 
-        if (!data.prediction || data.prediction.length === 0) {
-            el.innerText = "Aucune donnée";
-            return;
-        }
-
         el.innerText = "🏇 " + data.prediction.slice(0,3).join(" - ");
 
     } catch {
-        el.innerText = "Erreur serveur";
+        el.innerText = "❌ Backend non connecté";
     }
 }
 
-// =====================
-// ✅ HISTORIQUE CORRIGÉ
-// =====================
+// ✅ HISTORIQUE
 async function loadHistory() {
     const container = document.getElementById("history");
     container.innerHTML = "Chargement...";
@@ -150,9 +143,7 @@ async function loadHistory() {
         const data = await res.json();
 
         if (!data || data.length === 0) {
-            container.innerHTML = `
-                <p>📅 Aujourd'hui → 🏇 Pronostic en cours...</p>
-            `;
+            container.innerHTML = "📅 Aucun historique pour le moment";
             return;
         }
 
@@ -169,7 +160,7 @@ async function loadHistory() {
         });
 
     } catch {
-        container.innerHTML = "Erreur chargement";
+        container.innerHTML = "❌ Backend non connecté";
     }
 }
 
@@ -215,9 +206,10 @@ function share() {
 
 // INIT
 window.onload = () => {
+    loadFree();
     loadHistory();
-    loadFree(); // 🔥 IMPORTANT
 };
+
 </script>
 
 </body>
