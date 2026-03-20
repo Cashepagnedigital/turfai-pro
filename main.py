@@ -7,8 +7,7 @@ import random
 
 app = FastAPI()
 
-ADMIN_KEY = "TURFAI-ADMIN-2026"
-
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,48 +17,51 @@ app.add_middleware(
 )
 
 DB_FILE = "database.json"
-HISTORY_FILE = "history.json"
 
-def load_json(file, default):
-    if not os.path.exists(file):
-        return default
-    with open(file, "r") as f:
+# ========================
+# UTILS
+# ========================
+
+def load_json():
+    if not os.path.exists(DB_FILE):
+        return {}
+    with open(DB_FILE, "r") as f:
         return json.load(f)
 
-def save_json(file, data):
-    with open(file, "w") as f:
+def save_json(data):
+    with open(DB_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-def generate():
-    chevaux = list(range(1, 21))
-    random.shuffle(chevaux)
-    return chevaux
+# ========================
+# QUINTE
+# ========================
 
 @app.get("/quinte")
 def quinte():
-    prediction = generate()
-    history = load_json(HISTORY_FILE, [])
-    today = datetime.now().strftime("%Y-%m-%d")
+    chevaux = list(range(1, 21))
+    random.shuffle(chevaux)
+    return {"prediction": chevaux[:5]}
 
-    if not any(h["date"] == today for h in history):
-        history.insert(0, {
-            "date": today,
-            "prediction": prediction[:5]
-        })
-        save_json(HISTORY_FILE, history)
-
-    return {"prediction": prediction}
+# ========================
+# HISTORIQUE
+# ========================
 
 @app.get("/history")
 def history():
-    return load_json(HISTORY_FILE, [])[:10]
+    return [
+        {
+            "date": datetime.now().isoformat(),
+            "prediction": random.sample(range(1, 21), 5)
+        }
+    ]
+
+# ========================
+# PREMIUM
+# ========================
 
 @app.get("/premium")
 def premium(key: str):
-    if key == ADMIN_KEY:
-        return {"access": True}
-
-    users = load_json(DB_FILE, {})
+    users = load_json()
 
     if key not in users:
         return {"access": False}
@@ -67,30 +69,40 @@ def premium(key: str):
     expire = datetime.fromisoformat(users[key]["expires"])
     return {"access": expire > datetime.now()}
 
+# ========================
+# PAYMENT
+# ========================
+
 @app.post("/payment-success")
 async def payment(request: Request):
     data = await request.json()
 
-    user = data.get("user_id")
+    user_id = data.get("user_id")
     ref = data.get("ref")
 
-    if not user:
-        return {"error": "no user"}
-
-    users = load_json(DB_FILE, {})
+    users = load_json()
     now = datetime.now()
 
-    users[user] = {
-        "expires": (now + timedelta(days=30)).isoformat(),
-        "referrals": users.get(user, {}).get("referrals", 0)
-    }
+    if user_id not in users:
+        users[user_id] = {
+            "expires": (now + timedelta(days=30)).isoformat(),
+            "referrals": 0
+        }
+    else:
+        users[user_id]["expires"] = (
+            datetime.fromisoformat(users[user_id]["expires"]) + timedelta(days=30)
+        ).isoformat()
 
     if ref and ref in users:
-        users[ref]["referrals"] = users[ref].get("referrals", 0) + 1
+        users[ref]["referrals"] += 1
 
-    save_json(DB_FILE, users)
+    save_json(users)
 
-    return {"ok": True}
+    return {"status": "OK"}
+
+# ========================
+# ROOT
+# ========================
 
 @app.get("/")
 def home():
