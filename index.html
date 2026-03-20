@@ -1,4 +1,4 @@
- <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
@@ -56,46 +56,36 @@ button {
 
 <div class="container">
 
-<!-- GRATUIT -->
 <div class="card">
     <h2>🎁 Pronostic Gratuit</h2>
     <button onclick="loadFree()">Voir</button>
     <p id="free"></p>
 </div>
 
-<!-- HISTORIQUE -->
 <div class="card">
     <h2>📜 Historique Quinté+</h2>
-    <p>🏇 3 - 12 - 7 - 1 - 9</p>
-    <p>🏇 5 - 8 - 2 - 11 - 4</p>
-    <p>🏇 9 - 1 - 6 - 14 - 3</p>
+    <div id="history"></div>
 </div>
 
-<!-- VIP -->
 <div class="card">
     <h2>💎 Abonnement VIP</h2>
-    <p class="highlight">Accès complet aux pronostics</p>
-    <p>💰 Prix unique : <b>6500 CFA</b></p>
-
-    <button class="pay-btn" onclick="payer()">🔥 S'abonner maintenant</button>
+    <p class="highlight">Accès complet</p>
+    <p>💰 <b>6500 CFA / mois</b></p>
+    <button class="pay-btn" onclick="payer()">🔥 S'abonner</button>
 </div>
 
-<!-- ACCES VIP -->
 <div class="card">
     <h2>🔐 Accès VIP</h2>
+    <input id="vipKey" placeholder="Entrer votre clé">
     <button onclick="checkVIP()">Accéder</button>
     <p id="vip"></p>
 </div>
 
-<!-- PARRAINAGE -->
 <div class="card">
     <h2>👥 Parrainage</h2>
-    <p class="highlight">Invite et gagne des bonus</p>
-
     <p id="refLink"></p>
-
-    <button onclick="copyLink()">📋 Copier</button>
-    <button onclick="share()">📲 WhatsApp</button>
+    <button onclick="copyLink()">Copier</button>
+    <button onclick="share()">WhatsApp</button>
 </div>
 
 </div>
@@ -104,7 +94,7 @@ button {
 const API = "https://turfai-production.up.railway.app";
 const PAY = "https://uazgnjsa.mychariow.shop/prd_l1336b";
 
-// USER UNIQUE
+// USER
 let user = localStorage.getItem("user");
 if (!user) {
     user = "user_" + Math.random().toString(36).substring(2, 10);
@@ -116,7 +106,6 @@ const params = new URLSearchParams(window.location.search);
 const ref = params.get("ref");
 if (ref) localStorage.setItem("ref", ref);
 
-// LIEN PARRAINAGE
 const refLink = `${window.location.origin}?ref=${user}`;
 document.getElementById("refLink").innerText = refLink;
 
@@ -133,10 +122,36 @@ async function loadFree() {
     }
 }
 
+// HISTORIQUE
+async function loadHistory() {
+    try {
+        const res = await fetch(API + "/history");
+        const data = await res.json();
+
+        const container = document.getElementById("history");
+        container.innerHTML = "";
+
+        data.forEach(item => {
+            const d = new Date(item.date);
+            const dateFormatted = d.toLocaleDateString("fr-FR");
+
+            const p = document.createElement("p");
+            p.innerText = `📅 ${dateFormatted} → 🏇 ${item.prediction.join(" - ")}`;
+
+            container.appendChild(p);
+        });
+
+    } catch {
+        document.getElementById("history").innerText = "Erreur";
+    }
+}
+
 // VIP
 async function checkVIP() {
+    const key = document.getElementById("vipKey").value || user;
+
     try {
-        const res = await fetch(API + "/premium?key=" + user);
+        const res = await fetch(API + "/premium?key=" + key);
         const data = await res.json();
 
         if (data.access) {
@@ -153,32 +168,29 @@ async function checkVIP() {
     }
 }
 
-// 💳 PAIEMENT INTÉGRÉ (IMPORTANT)
+// PAIEMENT
 function payer() {
     const ref_code = localStorage.getItem("ref") || "";
-
-    const url = PAY + "?user_id=" + user + "&ref=" + ref_code;
-
-    window.location.href = url;
+    window.location.href = PAY + "?user_id=" + user + "&ref=" + ref_code;
 }
 
 // COPY
 function copyLink() {
     navigator.clipboard.writeText(refLink);
-    alert("Lien copié !");
+    alert("Copié !");
 }
 
 // SHARE
 function share() {
-    const msg = `🏇 TurfAI Pro
-
-Gagne au Quinté+
-
-${refLink}`;
-
+    const msg = `🏇 TurfAI Pro\n${refLink}`;
     window.open("https://wa.me/?text=" + encodeURIComponent(msg));
 }
+
+// INIT
+window.onload = () => {
+    loadHistory();
+};
 </script>
 
 </body>
- </html>
+</html>
